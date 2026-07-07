@@ -60,7 +60,7 @@ def main():
         f.write(message + "\n")
 
     if not success:
-        print(message)
+        print(message, file=sys.stderr)
         sys.exit(1)
 
 
