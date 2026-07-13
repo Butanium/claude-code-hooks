@@ -40,9 +40,11 @@ print(
                 "additionalContext": (
                     f"Reminder: {global_claude_md} is AUTO-GENERATED at every session start "
                     "by hooks/detect_env.py from CLAUDE.template.md (+ env-configs/<env>.md "
-                    "for the {{ENV_CONFIG}} block). Any direct edit will be silently wiped "
+                    "for the {{ENV_CONFIG}} block, + standalone files pulled in via "
+                    "{{INCLUDE:path}} directives). Any direct edit will be silently wiped "
                     "at the next SessionStart. If you intend to change these instructions, "
-                    "edit CLAUDE.template.md or the relevant env-configs/*.md instead."
+                    "edit CLAUDE.template.md, the relevant env-configs/*.md, or the "
+                    "{{INCLUDE}}'d file instead."
                 ),
             }
         }

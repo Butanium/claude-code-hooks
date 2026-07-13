@@ -93,6 +93,30 @@ def strip_html_comments(text: str) -> str:
     return re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
 
 
+def resolve_includes(text: str) -> str:
+    """Replace `{{INCLUDE:path}}` directives with the file's content.
+
+    Relative paths resolve against the config dir. Non-recursive: directives
+    inside an included file are left as-is. Lets template sections live in
+    standalone files that agents can edit directly without touching the
+    template (and without the edit being wiped by regeneration).
+    """
+
+    def replace(match: re.Match) -> str:
+        raw = match.group(1).strip()
+        path = Path(raw).expanduser()
+        if not path.is_absolute():
+            path = CLAUDE_DIR / path
+        if not path.exists():
+            # stdout → relayed into the agent's context at session start
+            print(f"⚠️  CLAUDE.md include not found: {raw} (from {TEMPLATE_FILE.name})")
+            return f"*(include not found: `{raw}`)*"
+        content = path.read_text().strip()
+        return content if content else f"*(nothing here yet — `{raw}` is empty)*"
+
+    return re.sub(r"\{\{INCLUDE:([^}\n]+)\}\}", replace, text)
+
+
 def load_model_quirks(model: str) -> str | None:
     """Load model-specific quirks, falling back from full id to its context variant.
 
@@ -158,7 +182,10 @@ def main():
         template = TEMPLATE_FILE.read_text()
         # Comments in the template are kept-for-history text (e.g. retired rules);
         # strip them so the generated CLAUDE.md doesn't load disabled guidance.
-        output = strip_html_comments(template.replace("{{ENV_CONFIG}}", env_config))
+        # Includes resolve after ENV_CONFIG so env-configs can use {{INCLUDE:}} too.
+        output = strip_html_comments(
+            resolve_includes(template.replace("{{ENV_CONFIG}}", env_config))
+        )
         header = "<!-- DO NOT EDIT — generated from CLAUDE.template.md by detect_env.py. Edit the template instead. -->\n\n"
         OUTPUT_FILE.write_text(header + output)
         print(f"Generated CLAUDE.md for environment: {env}", file=sys.stderr)

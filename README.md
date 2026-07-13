@@ -93,6 +93,14 @@ the hooks' own environment.)
 `env-configs/`, optional `model-quirks/`) in `$CLAUDE_CONFIG_DIR` — skip it if
 you don't generate your CLAUDE.md this way.
 
+Besides `{{ENV_CONFIG}}`, the template (and env-configs) may contain
+`{{INCLUDE:path}}` directives (path relative to `$CLAUDE_CONFIG_DIR`), replaced
+at generation time with the file's content. Useful for sections that agents
+append to directly (e.g. a running list of observations): they edit the small
+standalone file instead of the master template, and the next regeneration picks
+it up. Missing include → placeholder text + a session-start warning; empty file
+→ a "nothing here yet" placeholder. Non-recursive.
+
 ## Personal config — nothing personal in the sources
 
 This folder is public, so anything user- or machine-specific is injected via
