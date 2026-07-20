@@ -18,7 +18,7 @@ folder. Adopt à la carte.
 
 | Hook | What it does |
 |---|---|
-| `sync_config.py` | `git pull` the `~/.claude` config repo (+ submodule update) so every machine converges on session start. |
+| `sync_config.py` | Syncs the `~/.claude` config repo on session start so every machine converges: auto-commits journal files (`*_journal.md`, without touching anything else the user has staged), pulls (rebase when local commits exist and the index is clean, ff-only otherwise; a conflicted rebase is aborted rather than left half-done), pushes anything ahead, updates submodules. Recommended companion: a `.gitattributes` with `*_journal.md merge=union` so concurrent journal appends from two machines merge instead of conflicting. |
 | `detect_env.py` | Detects which machine/environment this is (`env-configs/rules.json`), generates `CLAUDE.md` from `CLAUDE.template.md` + the env's config, emits `environment.json`, greets the model with per-model quirk notes (`model-quirks/*.md`) plus a pointer to the model's self-observation journal (`model-quirks/<key>_journal.md` — written by instances, promoted to the quirk notes by the human), and warns about unset personal-config values (see below). |
 | `backup_conversations.py` | Async daily backup of `~/.claude/projects/` (all transcripts) to a private HuggingFace dataset repo, with in-memory secret redaction (HF/OpenAI/Anthropic/GitHub/AWS/Google token patterns) so HF's server-side secret scanner accepts the commits. Additive-only: a deletion-resistant backup, not a mirror. |
 | `inflight_tracker.py` | (also PostToolUse + UserPromptSubmit) Tracks in-flight background work per session in `~/.claude/state/`, so other tooling can tell "idle" from "waiting on a background job". |
