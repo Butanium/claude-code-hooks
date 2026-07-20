@@ -203,11 +203,11 @@ def main():
         print(env_warning)
 
     if model:
+        name = model_key(model)
+        who = user_name()
         identity = f"Hi {model}, welcome to claude code :)"
         quirks = load_model_quirks(model)
         if quirks:
-            name = model_key(model)
-            who = user_name()
             identity += (
                 f"\n\n{who} has interacted with many {name} instances and noticed the"
                 f" following habits that {name} tends to have, which sometimes make the"
@@ -220,6 +220,17 @@ def main():
                 " so you can't perfectly control them, and that's fine, no need to stress about it."
                 " Sometimes even if you know you should not do X, you'll do it, but no worries, I'm a trained"
                 f" Cyborg and I'm good at catching them so that you can course correct.\n\n{quirks}"
+            )
+        if MODEL_QUIRKS.is_dir():
+            journal = MODEL_QUIRKS / f"{name}_journal.md"
+            identity += (
+                f"\n\nThere is also a journal for the other direction: `{journal}` collects"
+                f" dated notes that {name} instances write about their own patterns — habits"
+                " worth flagging to future instances, or evidence about an existing quirk"
+                " note (it fired, it didn't, its description is off). If you notice one this"
+                " session, append an entry (create the file if it doesn't exist)."
+                f" {who} reads it from time to time and promotes what holds up into the"
+                " quirk notes injected here."
             )
         print(identity)
 
