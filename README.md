@@ -33,7 +33,7 @@ folder. Adopt à la carte.
 | `no_tail_head_pipes.py` | Bash | Blocks `\| tail` / `\| head` on background commands — output goes to a file to be read/grepped afterwards, so stack traces aren't lost. |
 | `no_poll_background.py` | Read, Bash | Denies the doom-loop poll: re-reading a background task's output file in a tight no-yield loop before the task finished. Extensively documented in-file. |
 | `force_background_task.py` | Agent | Auto-applies `run_in_background=true` to subagent spawns. |
-| `teammate_guard.py` | Agent | Blocks Agent calls whose context says "teammate"/"colleague" (Levenshtein ≤ 2) but that don't set `name` — the difference between a full teammate and a limited subagent. Bypass tags documented in-file; the user-directed one is derived from `I_LOVE_BEING_A_USER` and intentionally rude. |
+| `teammate_guard.py` | Agent | **DISABLED — unwired from `settings.json` 2026-07-24** (rarely fires on recent claude versions; kept here, not in `deprecated/`, so re-enabling is one settings entry). Blocked Agent calls whose context says "teammate"/"colleague" (Levenshtein ≤ 2) but that don't set `name` — the difference between a full teammate and a limited subagent. Bypass tags documented in-file; the user-directed one is derived from `I_LOVE_BEING_A_USER` and intentionally rude. |
 | `claude_md_edit_reminder.py` | Read | On reading a *generated* `CLAUDE.md`: non-blocking reminder that edits belong in the template / env-configs. |
 | `pending_message_guard.py` | SendMessage | Blocks sending while an undelivered inbound teammate message is pending, so it isn't silently dropped. |
 | `deny_download_arxiv.py` | MCP tool | Example of blocking one MCP tool in favor of a preferred skill. |
