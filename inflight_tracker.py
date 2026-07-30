@@ -192,10 +192,22 @@ def handle_post_tool_use(data: dict, session_id: str) -> None:
         return
 
     tool_input = data.get("tool_input", {})
-    if tool_name in ("Bash", "Agent") and not tool_input.get("run_in_background"):
+    tool_response = data.get("tool_response", {}) or {}
+    if tool_name == "Bash" and not tool_input.get("run_in_background"):
+        return
+    if tool_name == "Agent" and not (
+        tool_input.get("run_in_background")
+        or (
+            isinstance(tool_response, dict)
+            and (tool_response.get("isAsync") or tool_response.get("status") == "async_launched")
+        )
+    ):
+        # Worker-fork spawns never carry run_in_background in tool_input (the
+        # harness decides async-ness itself), so gating Agent on the input flag
+        # alone silently drops forks from tracking. The response shape reflects
+        # what actually happened. Measured 2026-07-30, claude 2.1.219.
         return
 
-    tool_response = data.get("tool_response", {}) or {}
     kind = TOOL_KIND[tool_name]
     task_id = ""
 

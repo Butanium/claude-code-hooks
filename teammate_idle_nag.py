@@ -12,6 +12,21 @@ Skips firing if any of the following are true:
   last lead message contains [silent-close] (for when the exchange has
   closed on both sides and a reply would just be noise).
 - No prior lead message exists in the transcript.
+- The nag budget for this lead message is exhausted (see
+  nag_budget_exhausted) — backstop against unsatisfiable-nag loops.
+
+Worker forks: when a fork of a teammate idles, this hook fires with the
+PARENT's transcript_path and a payload byte-identical to the teammate's
+own idle (measured 2026-07-30, claude 2.1.219) — so the fork can never
+satisfy the reply/silent-close predicates (its writes land in its own
+transcript under <session>/subagents/). What stands forks down is
+has_inflight: the fork's own task entry (tracked by inflight_tracker
+since its Agent-response gate handles fork spawns) is still in-flight at
+fork-idle time, because the task's terminal notification only reaches
+the parent transcript after the idle completes. Don't try to detect
+forks by comparing transcript mtimes — transcript writes are buffered,
+and the fork's final entries often flush only after this hook runs
+(tried and disproven live, same date).
 
 If the human user has DM'd the teammate since the last
 lead message, the hook stands down entirely — they're actively in
@@ -168,10 +183,10 @@ def has_silent_close(entry: dict) -> bool:
     return False
 
 
-def analyze_transcript(transcript_path: Path) -> tuple[bool, bool, bool]:
-    """Return (has_lead_msg, has_reply_to_lead, has_user_dm) for the relevant window."""
+def analyze_transcript(transcript_path: Path) -> tuple[bool, bool, bool, str]:
+    """Return (has_lead_msg, has_reply_to_lead, has_user_dm, lead_msg_uuid) for the relevant window."""
     if not transcript_path.exists():
-        return False, False, False
+        return False, False, False, ""
 
     entries: list[dict] = []
     with transcript_path.open() as f:
@@ -194,7 +209,7 @@ def analyze_transcript(transcript_path: Path) -> tuple[bool, bool, bool]:
         break
 
     if last_lead_idx is None:
-        return False, False, False
+        return False, False, False, ""
 
     has_reply = False
     has_user_dm = False
@@ -219,7 +234,42 @@ def analyze_transcript(transcript_path: Path) -> tuple[bool, bool, bool]:
             if isinstance(content, str) and "teammate_idle_nag.py" in content:
                 already_nagged = True
 
-    return True, has_reply or already_nagged, has_user_dm
+    lead_uuid = str(entries[last_lead_idx].get("uuid") or entries[last_lead_idx].get("timestamp") or last_lead_idx)
+    return True, has_reply or already_nagged, has_user_dm, lead_uuid
+
+
+MAX_NAGS_PER_LEAD_MSG = 3
+
+
+def nag_budget_exhausted(session_id: str, lead_msg_uuid: str) -> bool:
+    """Loop backstop: cap nags per lead message, counted in a state file.
+
+    The in-transcript already_nagged check misses idle events whose feedback
+    lands in a different transcript than the one this hook analyzes — worker
+    forks idle against the parent's transcript (measured 2026-07-30, claude
+    2.1.219), and one such fork got nagged 9+ times with no way to satisfy
+    the predicate. Forks are normally stood down by has_inflight (their own
+    task's terminal notification can't have reached the parent transcript
+    before their idle completes), but if that gate ever fails, this cap
+    bounds the damage instead of looping forever. Side effect of calling:
+    consumes one unit of budget when not exhausted.
+    """
+    if not session_id or not lead_msg_uuid:
+        return False
+    ledger_path = STATE_ROOT / session_id / "idle_nag_ledger.json"
+    ledger = {"lead": lead_msg_uuid, "count": 0}
+    try:
+        prior = json.loads(ledger_path.read_text())
+        if prior.get("lead") == lead_msg_uuid:
+            ledger = prior
+    except (OSError, json.JSONDecodeError):
+        pass
+    if ledger.get("count", 0) >= MAX_NAGS_PER_LEAD_MSG:
+        return True
+    ledger["count"] = ledger.get("count", 0) + 1
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(json.dumps(ledger))
+    return False
 
 
 def main() -> None:
@@ -237,7 +287,7 @@ def main() -> None:
     if has_inflight(session_id, str(transcript_path)):
         return
 
-    has_lead, has_reply, has_user_dm = analyze_transcript(transcript_path)
+    has_lead, has_reply, has_user_dm, lead_uuid = analyze_transcript(transcript_path)
     if not has_lead or has_reply:
         return
 
@@ -246,6 +296,9 @@ def main() -> None:
     # down. A fresh lead message re-anchors `last_lead_idx` past this DM and
     # nagging resumes normally; the suppression is per-message, not permanent.
     if has_user_dm:
+        return
+
+    if nag_budget_exhausted(session_id, lead_uuid):
         return
 
     msg = (
