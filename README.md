@@ -6,8 +6,12 @@ teammate/multi-agent workflow enforcement, config generation, and
 conversation backups. Battle-tested daily; published as working reference
 material rather than a turnkey framework — wire in the ones you want.
 
-Companion repo: [claude-code-patches](https://github.com/Butanium/claude-code-patches)
-(byte patches for the Claude Code binary, applied by a SessionStart hook).
+Companion repos: [claude-code-patches](https://github.com/Butanium/claude-code-patches)
+(byte patches for the Claude Code binary, applied by a SessionStart hook) and
+[custom-claude-mcps](https://github.com/Butanium/custom-claude-mcps) (small MCP
+servers this suite pairs with — notably `team-inbox`, whose `inbox_state.py`
+helper `pending_message_guard.py` imports from `~/.claude/mcp/team-inbox/`, and
+whose `teammate_status` tool reads the state `inflight_tracker.py` maintains).
 
 ## The hooks
 
