@@ -16,9 +16,17 @@ Identifies the sending agent via:
   if absent, falls back to scanning team configs for a matching leadSessionId.
 - `transcript_path` from hook input (no need to glob projects/).
 
-Bypass: include `[ACK-PENDING]` in `message` or `summary` to override.
-Protocol messages (dict-form `shutdown_request`/`shutdown_response`/
-`plan_approval_response`) pass through unrestricted.
+Bypass: include `[ACK-PENDING]` in `message` or `summary` (for
+`shutdown_request`, in `reason`) to override.
+
+Dict-form protocol *responses* (`shutdown_response`,
+`plan_approval_response`) pass through unrestricted — they answer the
+recipient's own request, so blocking them can only deadlock the exchange.
+`shutdown_request` is guarded like a text message: it's the one send where
+acting blind to an unseen reply matters most (2026-07-30: a lead asked its
+reviewer "anything left before shutdown?", the reviewer answered with a real
+finding, and the lead — seeing only `teammate_status` "idle" — sent the
+shutdown_request while that answer sat undelivered in its inbox).
 """
 from __future__ import annotations
 
@@ -77,13 +85,20 @@ def main() -> None:
     if not to:
         return
 
-    # Skip protocol responses (dict-form messages — shutdown / plan approval).
+    # Dict-form responses pass (see module docstring); shutdown_request is
+    # guarded like text, with the bypass tag carried in its `reason` field.
     msg = tool_input.get("message")
-    if not isinstance(msg, str):
+    if isinstance(msg, dict):
+        if msg.get("type") != "shutdown_request":
+            return
+        bypass_haystack = str(msg.get("reason", ""))
+    elif isinstance(msg, str):
+        bypass_haystack = msg
+    else:
         return
 
     summary = tool_input.get("summary", "") or ""
-    if "[ACK-PENDING]" in msg or "[ACK-PENDING]" in summary:
+    if "[ACK-PENDING]" in bypass_haystack or "[ACK-PENDING]" in summary:
         return
 
     ctx = resolve_context(data)
@@ -116,7 +131,8 @@ def main() -> None:
         f"haven't seen yet. End your turn (stop emitting tool calls) so the "
         f"harness flushes them — you'll see the full content on your next "
         f"turn. To send anyway after acknowledging the reply, include "
-        f"[ACK-PENDING] in your message or summary.",
+        f"[ACK-PENDING] in your message or summary (for a shutdown_request: "
+        f"in its reason field).",
         "",
         "Preview:",
     ]
