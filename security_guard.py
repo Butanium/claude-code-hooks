@@ -68,11 +68,19 @@ for pattern, description in DANGEROUS_PATTERNS:
     if re.search(pattern, cmd, re.IGNORECASE) or re.search(
         pattern, cmd_expanded, re.IGNORECASE
     ):
+        reason = f"🛑 SECURITY STOP: Dangerous command detected ({description}): {cmd[:100]}"
         print(
             json.dumps(
                 {
+                    # `continue: false` alone only halts the agent loop *after* the
+                    # tool runs -- blocking the call needs permissionDecision: deny.
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": reason,
+                    },
                     "continue": False,
-                    "stopReason": f"🛑 SECURITY STOP: Dangerous command detected ({description}): {cmd[:100]}",
+                    "stopReason": reason,
                 }
             )
         )
