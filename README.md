@@ -31,7 +31,7 @@ folder. Adopt à la carte.
 
 | Hook | Matcher | What it does |
 |---|---|---|
-| `security_guard.py` | Bash | Blocks obviously dangerous commands (`permissionDecision: "deny"`) and stops the agent loop (`continue: false`) so the human is pulled in. `continue: false` alone does *not* block — the tool runs first and the stop lands after. |
+| `security_guard.py` | Bash | Blocks obviously dangerous commands (`permissionDecision: "deny"`) and stops the agent loop (`continue: false`) so the human is pulled in. `continue: false` alone does *not* block — the tool runs first and the stop lands after. Also pings the human's ntfy hotline (`CLAUDE_HOTLINE_TOPIC`, skipped when unset) with host / cwd / session id / full command, since both in-harness signals assume someone is watching the terminal. |
 | `force_background_bash.py` | Bash | Auto-applies `run_in_background=true` when the requested timeout exceeds 30s — long tasks shouldn't block the conversation. |
 | `force_background_sleep.py` | Bash | Auto-backgrounds `sleep`-as-watchdog commands so a task finishing early doesn't strand the agent on its own timer. |
 | `no_tail_head_pipes.py` | Bash | Blocks `\| tail` / `\| head` on background commands — output goes to a file to be read/grepped afterwards, so stack traces aren't lost. |

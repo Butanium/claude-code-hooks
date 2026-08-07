@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
-"""PreToolUse hook: force-stops on dangerous commands."""
+"""PreToolUse hook: denies dangerous Bash commands and stops the turn.
+
+Also pings the human's ntfy hotline, because the two in-harness signals both
+depend on someone reading the session: the deny reason goes to Claude and the
+stopReason goes to a terminal that may be unattended. An agent reaching for
+mkfs is exactly the moment the human wants an out-of-band tap on the shoulder.
+"""
 import json
 import os
 import re
+import socket
 import sys
-
-data = json.load(sys.stdin)
-
-if data.get("tool_name") != "Bash":
-    sys.exit(0)
-
-cmd = data.get("tool_input", {}).get("command", "")
+import urllib.request
 
 # Expand ~ and $HOME for pattern matching
 home = os.path.expanduser("~")
-cmd_expanded = cmd.replace("~", home).replace("$HOME", home)
+
+HOTLINE_ENV = "CLAUDE_HOTLINE_TOPIC"
+NTFY_BASE = os.environ.get("NTFY_BASE_URL", "https://ntfy.sh").rstrip("/")
+# ntfy's default per-message cap is 4 KiB; leave room for the surrounding fields.
+MAX_CMD_CHARS = 2000
 
 DANGEROUS_PATTERNS = [
     # Recursive delete on critical paths
@@ -64,27 +69,91 @@ DANGEROUS_PATTERNS = [
     (r"Invoke-Expression.*DownloadString", "PowerShell download-and-execute"),
 ]
 
-for pattern, description in DANGEROUS_PATTERNS:
-    if re.search(pattern, cmd, re.IGNORECASE) or re.search(
-        pattern, cmd_expanded, re.IGNORECASE
-    ):
-        reason = f"🛑 SECURITY STOP: Dangerous command detected ({description}): {cmd[:100]}"
-        print(
-            json.dumps(
-                {
-                    # `continue: false` alone only halts the agent loop *after* the
-                    # tool runs -- blocking the call needs permissionDecision: deny.
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "deny",
-                        "permissionDecisionReason": reason,
-                    },
-                    "continue": False,
-                    "stopReason": reason,
-                }
-            )
-        )
-        sys.exit(0)
+def match_danger(cmd):
+    """Return the description of the first pattern `cmd` trips, or None."""
+    cmd_expanded = cmd.replace("~", home).replace("$HOME", home)
+    for pattern, description in DANGEROUS_PATTERNS:
+        if re.search(pattern, cmd, re.IGNORECASE) or re.search(
+            pattern, cmd_expanded, re.IGNORECASE
+        ):
+            return description
+    return None
 
-# Not dangerous, allow (other hooks like force_background will still run)
-sys.exit(0)
+
+def build_alert(description, cmd, data):
+    """Build the (title, body) ntfy payload. Pure — tests call this directly."""
+    shown = cmd
+    if len(cmd) > MAX_CMD_CHARS:
+        shown = f"{cmd[:MAX_CMD_CHARS]}\n… truncated, {len(cmd)} chars total"
+    lines = [
+        f"host: {socket.gethostname()}",
+        f"cwd: {data.get('cwd') or '?'}",
+        f"session: {data.get('session_id') or '?'}",
+        "",
+        shown,
+    ]
+    return f"SECURITY STOP: {description}", "\n".join(lines)
+
+
+def notify_hotline(description, cmd, data):
+    """Best-effort out-of-band ping. Never let this stop the deny from landing."""
+    topic = os.environ.get(HOTLINE_ENV, "").strip()
+    if not topic:
+        print(
+            f"{HOTLINE_ENV} unset — no out-of-band alert sent (see detect_env.py)",
+            file=sys.stderr,
+        )
+        return False
+    title, body = build_alert(description, cmd, data)
+    req = urllib.request.Request(
+        f"{NTFY_BASE}/{topic}",
+        data=body.encode("utf-8"),
+        headers={
+            # ntfy header values must be latin-1-safe for urllib, so the emoji
+            # lives in Tags (rendered by ntfy) rather than in Title.
+            "Title": title.encode("ascii", "replace").decode("ascii"),
+            "Priority": "high",
+            "Tags": "rotating_light",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return 200 <= resp.status < 300
+    except Exception as exc:  # network is a boundary; the deny matters more
+        print(f"hotline ntfy failed ({exc!r}) — deny still applied", file=sys.stderr)
+        return False
+
+
+def main():
+    data = json.load(sys.stdin)
+    if data.get("tool_name") != "Bash":
+        return
+
+    cmd = data.get("tool_input", {}).get("command", "")
+    description = match_danger(cmd)
+    if description is None:
+        # Not dangerous, allow (other hooks like force_background still run)
+        return
+
+    notify_hotline(description, cmd, data)
+    reason = f"🛑 SECURITY STOP: Dangerous command detected ({description}): {cmd[:100]}"
+    print(
+        json.dumps(
+            {
+                # `continue: false` alone only halts the agent loop *after* the
+                # tool runs -- blocking the call needs permissionDecision: deny.
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": reason,
+                },
+                "continue": False,
+                "stopReason": reason,
+            }
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()
+    sys.exit(0)
