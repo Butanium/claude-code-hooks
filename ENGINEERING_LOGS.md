@@ -43,3 +43,32 @@ passes and loses everything.
 Audit artifacts (private, the raw commands carry personal paths):
 `~/.claude/scratch/tail-head-hook-audit/`, incl. `check_against_labels.py`
 which re-scores the installed hook against the labels.
+
+## 2026-08-28 — `force_background_bash.py`: heredoc kill-class narrowed to the shapes that actually kill
+
+The hook's deny-with-advice for >60s sync timeouts treated any `<<` as
+"the CLI will SIGTERM this at timeout instead of backgrounding it". A
+session asked whether that warning was still true on CLI 2.1.250, so it was
+re-probed (5s timeout, 12s `python3 -c 'time.sleep(12)'`, eleven draws across
+the strata a static analyzer could care about). Still kills: a `$VAR` /
+backtick redirect target (with or without a heredoc), `git` anywhere in the
+chain, an **unquoted** `<<EOF` (even with no redirect), and a quoted
+`<<'EOF' > out` with the redirect *after* the operator. Backgrounds fine:
+literal redirect paths, and a quoted heredoc whose redirects all precede the
+operator — `cmd > out.log 2>&1 <<'EOF'` — regardless of body content
+(`$HOME`, backticks, pipes and `>` inside the body don't matter), alone, in a
+`;`/`&&` chain, or followed by a later redirecting statement.
+
+`is_kill_class` now delegates heredocs to `heredoc_kills`: unquoted delimiter
+→ kill; quoted delimiter with any `<`/`>` later on the operator's line → kill;
+otherwise not kill-class. `<<<` herestrings stay kill-class untested. The deny
+text now tells the agent the safe form instead of "no heredoc combined with a
+redirect", which was both too broad (the `> out <<'EOF'` form is fine) and
+too narrow (unquoted heredocs kill without any redirect).
+
+assumes: the analyzer's verdict is a pure function of the command string
+(memory note `bash-timeout-kill-vs-background` traced it to a static
+decomposition in the 2.1.216 bundle) and that these eleven probes on one
+Linux box generalize. Re-probe after CLI updates — the fixtures in
+`tests/test_force_background_bash.py` are the probe list; each is a 5s-timeout
+Bash call whose expected outcome is its list.

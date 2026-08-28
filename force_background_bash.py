@@ -16,14 +16,19 @@
   remain allowed because subagents can't usefully background — they don't
   receive completion notifications.
 
-Auto-backgroundability (CLI v2.1.216; undocumented, details in
-https://github.com/anthropics/claude-code/issues/79879): the CLI's static
-shell analyzer must fully decompose the command, no git subcommand, first
-word not sleep. KILL_CLASS_RE approximates the analyzer's rejections we
-verified empirically ($VAR/backtick redirect targets, heredocs, process
-substitution). A false positive here just means deny-with-advice instead of
-clamp, which is safe; a false negative means the old behavior (clamp, kill
-at 30s), no worse than before this check existed.
+Auto-backgroundability (CLI v2.1.216, re-probed on v2.1.250; undocumented,
+details in https://github.com/anthropics/claude-code/issues/79879): the CLI's
+static shell analyzer must fully decompose the command, no git subcommand,
+first word not sleep. KILL_CLASS_RE + is_kill_class approximate the
+analyzer's rejections we verified empirically: $VAR/backtick redirect
+targets, process substitution, and heredocs *except* the one shape that
+decomposes — quoted delimiter with every redirect placed before the operator
+(`cmd > out.log 2>&1 <<'EOF'`; body content is irrelevant). An unquoted
+`<<EOF` kills even without a redirect, and `<<'EOF' > out.log` (redirect
+after the operator) kills too. A false positive here just means
+deny-with-advice instead of clamp, which is safe; a false negative means the
+old behavior (clamp, kill at 30s), no worse than before this check existed.
+Probes: tests/test_force_background_bash.py, ENGINEERING_LOGS.md 2026-08-28.
 
 Teammates are distinguished from subagents by agent_id format: teammate IDs
 look like ``name@team_name``, subagent IDs are bare hex. The main agent has
@@ -35,12 +40,24 @@ import re
 import sys
 
 KILL_CLASS_RE = re.compile(
-    r"<<"  # heredoc / herestring (heredoc + file redirect is a verified kill; be conservative)
+    r"<<<"  # herestring (untested; conservative)
     r"|[<>]\("  # process substitution
     r"|[<>]\|?\s*[\"']?[$`]"  # $VAR or `...` as a redirect target (verified kill)
 )
+# `<<'EOF'` / `<<EOF` / `<<-EOF`: quote char (if any), delimiter, rest of that line
+HEREDOC_OP = re.compile(r"<<-?\s*(['\"]?)(\w+)\1([^\n]*)")
 GIT_RE = re.compile(r"(?:^|[;&|(]|\$\(|`)\s*(?:command\s+|builtin\s+)?git\b")
 SLEEP_RE = re.compile(r"^\s*sleep\b")
+
+
+def heredoc_kills(command: str) -> bool:
+    """A heredoc survives only with a quoted delimiter and no redirect after the
+    operator on its line (`cmd > out 2>&1 <<'EOF'`, verified on 2.1.250)."""
+    for m in HEREDOC_OP.finditer(command):
+        quoted, rest = m.group(1), m.group(3)
+        if not quoted or re.search(r"[<>]", rest):
+            return True
+    return False
 
 
 def is_kill_class(command: str) -> bool:
@@ -48,108 +65,118 @@ def is_kill_class(command: str) -> bool:
     instead of moving it to background (approximation, see module docstring)."""
     return bool(
         KILL_CLASS_RE.search(command)
+        or heredoc_kills(command)
         or GIT_RE.search(command)
         or SLEEP_RE.match(command)
     )
 
-data = json.load(sys.stdin)
 
-if data.get("tool_name") != "Bash":
-    sys.exit(0)
+def main():
+    data = json.load(sys.stdin)
 
-tool_input = data.get("tool_input", {})
-cmd = tool_input.get("command", "")
-agent_id = data.get("agent_id", "")
-is_subagent = bool(agent_id) and "@" not in agent_id
-
-# --- Subagent: block run_in_background unless escape hatch ---
-if is_subagent and tool_input.get("run_in_background"):
-    if "BACKGROUND_NEEDED" in cmd:
+    if data.get("tool_name") != "Bash":
         sys.exit(0)
+
+    tool_input = data.get("tool_input", {})
+    cmd = tool_input.get("command", "")
+    agent_id = data.get("agent_id", "")
+    is_subagent = bool(agent_id) and "@" not in agent_id
+
+    # --- Subagent: block run_in_background unless escape hatch ---
+    if is_subagent and tool_input.get("run_in_background"):
+        if "BACKGROUND_NEEDED" in cmd:
+            sys.exit(0)
+        print(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": (
+                            "BLOCKED: Subagents cannot use run_in_background=true. "
+                            "Unlike the main agent, subagents do not receive background "
+                            "task completion notifications — this leads to doom loops "
+                            "where you poll repeatedly wasting turns. Instead, run the "
+                            "command synchronously with a high timeout (e.g. "
+                            "timeout=600000 for 10min). If you genuinely need background "
+                            "execution (e.g. starting a server), include "
+                            "BACKGROUND_NEEDED in your command: "
+                            "echo BACKGROUND_NEEDED && your_actual_command"
+                        ),
+                    }
+                }
+            )
+        )
+        sys.exit(0)
+
+    # --- Subagent without background: high sync timeouts allowed (only mode they have) ---
+    if is_subagent:
+        sys.exit(0)
+
+    # --- Main agent / teammate: already background, leave alone ---
+    if tool_input.get("run_in_background"):
+        sys.exit(0)
+
+    # --- Main agent / teammate: sync timeout policy for > 60s requests ---
+    timeout = tool_input.get("timeout", 10000)
+    if timeout <= 60000:
+        sys.exit(0)
+
+    original_timeout_s = int(timeout / 1000)
+
+    if is_kill_class(cmd):
+        print(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": (
+                            f"BLOCKED: you requested a {original_timeout_s}s sync "
+                            "timeout for a command Claude Code cannot move to "
+                            "background at timeout (it contains a $VAR/backtick "
+                            "redirect target, git, leading sleep, an unquoted "
+                            "heredoc, or a heredoc with a redirect after the "
+                            "<<'EOF' operator — for these, sync timeout is a hard "
+                            "SIGTERM kill, see "
+                            "https://github.com/anthropics/claude-code/issues/79879). "
+                            "A long sync wait here risks losing the work at the "
+                            "timeout boundary. Re-run with run_in_background=true "
+                            "and monitor it (Monitor / task notification), or "
+                            "restructure the command so it can be auto-backgrounded: "
+                            "literal redirect paths, and heredocs written as "
+                            "`cmd > out.log 2>&1 <<'EOF'` (quoted delimiter, "
+                            "redirects before the operator)."
+                        ),
+                    }
+                }
+            )
+        )
+        sys.exit(0)
+
+    tool_input["timeout"] = 30000
+    message = (
+        f"Sync timeout policy: you requested a {original_timeout_s}s sync timeout "
+        "(>60s); clamped to 30s. This command passed the auto-background check, so "
+        "when the 30s sync timeout expires the Bash tool moves it to background "
+        "(it doesn't kill it) — the clamp only caps how long the conversation "
+        "blocks. If you expect this to take >60s, prefer run_in_background=true "
+        "upfront to skip the sync wait entirely, which can allow you to work on "
+        "other stuff while it's running and have stronger monitors: if this task "
+        "requires it, don't forget to monitor it properly with Monitor or /loop."
+    )
     print(
         json.dumps(
             {
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": (
-                        "BLOCKED: Subagents cannot use run_in_background=true. "
-                        "Unlike the main agent, subagents do not receive background "
-                        "task completion notifications — this leads to doom loops "
-                        "where you poll repeatedly wasting turns. Instead, run the "
-                        "command synchronously with a high timeout (e.g. "
-                        "timeout=600000 for 10min). If you genuinely need background "
-                        "execution (e.g. starting a server), include "
-                        "BACKGROUND_NEEDED in your command: "
-                        "echo BACKGROUND_NEEDED && your_actual_command"
-                    ),
+                    "updatedInput": tool_input,
+                    "additionalContext": message,
                 }
             }
         )
     )
-    sys.exit(0)
 
-# --- Subagent without background: high sync timeouts allowed (only mode they have) ---
-if is_subagent:
-    sys.exit(0)
 
-# --- Main agent / teammate: already background, leave alone ---
-if tool_input.get("run_in_background"):
-    sys.exit(0)
-
-# --- Main agent / teammate: sync timeout policy for > 60s requests ---
-timeout = tool_input.get("timeout", 10000)
-if timeout <= 60000:
-    sys.exit(0)
-
-original_timeout_s = int(timeout / 1000)
-
-if is_kill_class(cmd):
-    print(
-        json.dumps(
-            {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": (
-                        f"BLOCKED: you requested a {original_timeout_s}s sync "
-                        "timeout for a command Claude Code cannot move to "
-                        "background at timeout (it contains a heredoc, a "
-                        "$VAR/backtick redirect target, git, or leading sleep "
-                        "— for these, sync timeout is a hard SIGTERM kill, "
-                        "see https://github.com/anthropics/claude-code/issues/79879). "
-                        "A long sync wait here risks losing the work at the "
-                        "timeout boundary. Re-run with run_in_background=true "
-                        "and monitor it (Monitor / task notification), or "
-                        "restructure the command (literal redirect paths, no "
-                        "heredoc combined with a redirect) so it can be "
-                        "auto-backgrounded."
-                    ),
-                }
-            }
-        )
-    )
-    sys.exit(0)
-
-tool_input["timeout"] = 30000
-message = (
-    f"Sync timeout policy: you requested a {original_timeout_s}s sync timeout "
-    "(>60s); clamped to 30s. This command passed the auto-background check, so "
-    "when the 30s sync timeout expires the Bash tool moves it to background "
-    "(it doesn't kill it) — the clamp only caps how long the conversation "
-    "blocks. If you expect this to take >60s, prefer run_in_background=true "
-    "upfront to skip the sync wait entirely, which can allow you to work on "
-    "other stuff while it's running and have stronger monitors: if this task "
-    "requires it, don't forget to monitor it properly with Monitor or /loop."
-)
-print(
-    json.dumps(
-        {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "updatedInput": tool_input,
-                "additionalContext": message,
-            }
-        }
-    )
-)
+if __name__ == "__main__":
+    main()
