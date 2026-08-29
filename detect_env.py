@@ -88,9 +88,15 @@ def model_key(model: str) -> str:
     return key.strip()
 
 
+# A comment alone on its line takes the line with it (leaving a blank line would
+# break the surrounding markdown list); anything else is cut out in place.
+_LINE_COMMENT_RE = re.compile(r"^[ \t]*<!--.*?-->[ \t]*(?:\n|\Z)", re.DOTALL | re.MULTILINE)
+_INLINE_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
 def strip_html_comments(text: str) -> str:
-    """Remove HTML comments from text."""
-    return re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+    """Remove HTML comments from text, dropping whole-line ones entirely."""
+    return _INLINE_COMMENT_RE.sub("", _LINE_COMMENT_RE.sub("", text))
 
 
 def resolve_includes(text: str) -> str:

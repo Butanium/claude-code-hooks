@@ -3,6 +3,22 @@
 Append-only. What changed, why, and the gotcha — the reasoning that would
 otherwise end up as a comment in the hook.
 
+## 2026-08-28 — `detect_env.py`: whole-line comments no longer leave a blank line
+
+`strip_html_comments` was a single `re.sub(r"<!--.*?-->", "")`, so a template
+line that was *only* a comment collapsed to an empty line. In
+`CLAUDE.template.md` that's the common case — retired guidance is kept by
+commenting out individual bullets — and each one punched a blank line into the
+middle of the generated markdown list, splitting it. Regenerating dropped 30
+such lines from `CLAUDE.md`.
+
+Now two passes: a line-anchored one (`^[ \t]*<!--.*?-->[ \t]*(?:\n|\Z)`,
+DOTALL+MULTILINE) that eats the trailing newline of a comment owning its whole
+line — multi-line `<!--\n…\n-->` blocks included — then the original in-place
+sub for comments sharing a line with real text. Blank lines *around* a comment
+are left alone, so paragraph spacing is unchanged. Pinned by
+`tests/test_strip_html_comments.py`.
+
 ## 2026-08-28 — `no_tail_head_pipes.py`: producer-aware rule replaces the any-pipe regex
 
 The hook used to deny any background Bash call matching `\|\s*(tail|head)\b`.
