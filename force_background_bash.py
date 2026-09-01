@@ -30,14 +30,29 @@ deny-with-advice instead of clamp, which is safe; a false negative means the
 old behavior (clamp, kill at 30s), no worse than before this check existed.
 Probes: tests/test_force_background_bash.py, ENGINEERING_LOGS.md 2026-08-28.
 
+Patched binaries: the `auto-background.py` patch from
+https://github.com/Butanium/claude-code-patches makes EVERY command
+backgroundable at timeout, so the kill class no longer exists there and the
+deny branch would only get in the way. `binary_backgrounds_everything()`
+detects that patch in the claude binary Claude is running — the patched code
+shape must be present AND that module must run from source rather than from
+its stale bytecode (see the patch repo's `zz-bytecode-off.py`; a patched text
+whose bytecode is still enabled is inert). The check is cached per
+(path, size, mtime) in the temp dir; `FORCE_BACKGROUND_BASH_CLAUDE_BIN` points
+it at a specific binary (tests point it at a missing file to get stock rules).
+
 Teammates are distinguished from subagents by agent_id format: teammate IDs
 look like ``name@team_name``, subagent IDs are bare hex. The main agent has
 no agent_id at all. (In tmux/pane teammate mode agent_id is also absent —
 those fall through to main-agent rules, which is the intent.)
 """
 import json
+import os
 import re
+import shutil
+import struct
 import sys
+import tempfile
 
 KILL_CLASS_RE = re.compile(
     r"<<<"  # herestring (untested; conservative)
@@ -48,6 +63,94 @@ KILL_CLASS_RE = re.compile(
 HEREDOC_OP = re.compile(r"<<-?\s*(['\"]?)(\w+)\1([^\n]*)")
 GIT_RE = re.compile(r"(?:^|[;&|(]|\$\(|`)\s*(?:command\s+|builtin\s+)?git\b")
 SLEEP_RE = re.compile(r"^\s*sleep\b")
+
+# --- detection of the auto-background CLI patch -------------------------------
+# Stock Bash tool site: `X=!cn&&pred(cmd),Y=!cn&&!/git/i.test(cmd)`; the patch
+# turns `pred(cmd)` into `!0` (+ a same-length comment). The `/git/i.test(`
+# literal is the stable anchor (it also occurs at the PowerShell site, whose
+# predicate is `await …` and so never matches the stock/patched shapes).
+_GIT_TEST = b"&&!/git/i.test("
+_PATCHED_RE = re.compile(rb"=!(\w+)&&!0(?:/\*[a-z]*\*/| *),(\w+)=!\1$")
+_TRAILER = b"\n---- Bun! ----\n"
+_REC = 52
+
+
+def _bun_module_bytecode_len(data, off):
+    """Length of the JSC bytecode blob for the Bun standalone module whose JS
+    text covers file offset `off` (0 = that module runs from source). None if the
+    graph can't be parsed. Mirrors `_bungraph.py` in the patches repo."""
+    t = data.rfind(_TRAILER)
+    if t == -1:
+        return None
+    mp_off, mp_len = struct.unpack_from("<II", data, t - 24)
+    if mp_len == 0 or mp_len % _REC:
+        return None
+    p = (t // 512) * 512
+    base = None
+    while p >= 0:
+        (count,) = struct.unpack_from("<Q", data, p)
+        if 0 <= (t + len(_TRAILER)) - (p + 8) - count < 65536:
+            tbl = p + 8 + mp_off
+            if tbl + mp_len <= len(data):
+                noff, nlen = struct.unpack_from("<II", data, tbl)
+                if 0 < nlen < 512 and data[p + 8 + noff : p + 8 + noff + 8] == b"/$bunfs/":
+                    base = p + 8
+                    break
+        p -= 512
+    if base is None:
+        return None
+    tbl = base + mp_off
+    for i in range(mp_len // _REC):
+        r = tbl + i * _REC
+        _n, _nl, coff, clen, _s, _sl, _b, blen = struct.unpack_from("<8I", data, r)
+        if base + coff <= off < base + coff + clen:
+            return blen
+    return None
+
+
+def _inspect_binary(path):
+    with open(path, "rb") as f:
+        data = f.read()
+    pos = 0
+    while (i := data.find(_GIT_TEST, pos)) != -1:
+        if _PATCHED_RE.search(data, max(0, i - 80), i):
+            return _bun_module_bytecode_len(data, i) == 0
+        pos = i + 1
+    return False
+
+
+def binary_backgrounds_everything():
+    """True iff the claude binary in use carries the auto-background patch and
+    the patched module actually runs from source."""
+    path = os.environ.get("FORCE_BACKGROUND_BASH_CLAUDE_BIN") or shutil.which("claude")
+    if not path:
+        return False
+    try:
+        path = os.path.realpath(path)
+        st = os.stat(path)
+    except OSError:
+        return False
+    key = [path, st.st_size, int(st.st_mtime)]
+    cache = os.path.join(tempfile.gettempdir(), f"force_background_bash_patch_{os.getuid()}.json")
+    try:
+        with open(cache) as f:
+            c = json.load(f)
+        if c.get("key") == key:
+            return bool(c.get("patched"))
+    except (OSError, ValueError):
+        pass
+    try:
+        patched = _inspect_binary(path)
+    except OSError:
+        return False
+    try:
+        tmp = cache + f".{os.getpid()}"
+        with open(tmp, "w") as f:
+            json.dump({"key": key, "patched": patched}, f)
+        os.replace(tmp, cache)
+    except OSError:
+        pass
+    return patched
 
 
 def heredoc_kills(command: str) -> bool:
@@ -124,7 +227,7 @@ def main():
 
     original_timeout_s = int(timeout / 1000)
 
-    if is_kill_class(cmd):
+    if is_kill_class(cmd) and not binary_backgrounds_everything():
         print(
             json.dumps(
                 {

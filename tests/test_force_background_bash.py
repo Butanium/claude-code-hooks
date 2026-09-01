@@ -12,13 +12,19 @@ Run: python3 tests/test_force_background_bash.py
 """
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 HOOK = Path(__file__).resolve().parent.parent / "force_background_bash.py"
 sys.path.insert(0, str(HOOK.parent))
-from force_background_bash import is_kill_class  # noqa: E402
+from force_background_bash import binary_backgrounds_everything, is_kill_class  # noqa: E402
+
+# Stock rules for the e2e cases below: point the patch detector at a missing
+# binary so a patched local claude doesn't flip the kill-class branch.
+os.environ["FORCE_BACKGROUND_BASH_CLAUDE_BIN"] = "/nonexistent/claude"
 
 
 def check(label, cond, detail=""):
@@ -79,5 +85,27 @@ hso = (out or {}).get("hookSpecificOutput", {})
 check("e2e: safe heredoc with long timeout is clamped, not denied", hso.get("updatedInput", {}).get("timeout") == 30000, f"out={out}")
 
 check("e2e: short timeout is left alone", bash(KILL[0][1], 5000) is None)
+
+# --- auto-background patch detection --------------------------------------------
+# With no usable binary the detector says "stock" and the kill class is denied.
+check("patch detect: missing binary -> stock rules", binary_backgrounds_everything() is False)
+# Against the real local claude the answer is whatever the binary says; only
+# the branch it selects is asserted: patched -> clamp, stock -> deny.
+real = shutil.which("claude")
+if real:
+    env = dict(os.environ, FORCE_BACKGROUND_BASH_CLAUDE_BIN=os.path.realpath(real))
+    res = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(
+        {"tool_name": "Bash", "tool_input": {"command": KILL[0][1], "timeout": 120000}}),
+        capture_output=True, text=True, env=env)
+    hso = json.loads(res.stdout)["hookSpecificOutput"]
+    os.environ["FORCE_BACKGROUND_BASH_CLAUDE_BIN"] = os.path.realpath(real)
+    patched = binary_backgrounds_everything()
+    os.environ["FORCE_BACKGROUND_BASH_CLAUDE_BIN"] = "/nonexistent/claude"
+    if patched:
+        check("e2e: patched binary -> kill class is clamped, not denied",
+              hso.get("updatedInput", {}).get("timeout") == 30000, f"out={hso}")
+    else:
+        check("e2e: stock binary -> kill class is denied", hso.get("permissionDecision") == "deny", f"out={hso}")
+    print(f"     (local claude at {real}: {'auto-background patch active' if patched else 'stock'})")
 
 print("ALL OK")

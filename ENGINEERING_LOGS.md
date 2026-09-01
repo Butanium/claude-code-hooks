@@ -3,6 +3,30 @@
 Append-only. What changed, why, and the gotcha — the reasoning that would
 otherwise end up as a comment in the hook.
 
+## 2026-09-01 — `force_background_bash.py`: kill-class deny steps aside on a patched claude binary
+
+The `auto-background.py` patch in Butanium/claude-code-patches makes every
+Bash command backgroundable at sync timeout (it forces the CLI's eligibility
+flag true), so on a patched binary the kill class does not exist and the deny
+branch would only cost the agent a round-trip. `binary_backgrounds_everything()`
+looks at the claude binary in use (`which claude`, or
+`FORCE_BACKGROUND_BASH_CLAUDE_BIN`) and returns True only when the patched
+code shape is present at the Bash-tool site AND that module runs from source:
+Bun 1.4.1+ ships JSC bytecode per module and executes it without re-checking
+the text, so a patched text whose bytecode is still enabled is inert (found
+today — all text patches had been silently dead since 2.1.250). The bytecode
+check is a ~40-line copy of the patch repo's `_bungraph.py` module-table
+parser; the verdict is cached per (path, size, mtime) in the temp dir so the
+215 MB read happens once per binary. Tests pin the env var to a missing path
+for the stock-rules fixtures and add a branch assertion against the local
+binary, whichever state it is in.
+
+assumes: the module-table layout parsed here (52-byte records, table pointer
+at trailer-24, section start aligned to 512 with a leading u64 byte count) —
+verified on claude 2.1.214/233/250/257 linux. If Bun changes it, the parser
+returns None, the detector says "stock", and the hook falls back to denying —
+safe, just noisier.
+
 ## 2026-08-28 — `detect_env.py`: whole-line comments no longer leave a blank line
 
 `strip_html_comments` was a single `re.sub(r"<!--.*?-->", "")`, so a template
