@@ -148,7 +148,7 @@ def check_env_vars(env_data: dict) -> str | None:
     """
     who = user_name()
     expected = {
-        "CLAUDE_NOTIFS_NTFY_TOPIC": f"ntfy topic to send updates / files when {who} is away",
+        "CLAUDE_NTFY_TOPIC": f"ntfy topic to send updates / files when {who} is away",
         "CLAUDE_HOTLINE_NTFY_TOPIC": "ntfy topic for urgent contact when the harness path is unavailable",
         USER_NAME_VAR: "the human's name — hooks fall back to 'the user' in their messages",
     }

@@ -6,7 +6,7 @@ otherwise end up as a comment in the hook.
 ## 2026-09-01 — ntfy topic env vars renamed to a `*_NTFY_TOPIC` suffix
 
 `CLAUDE_HOTLINE_TOPIC` / `CLAUDE_NOTIFS_TOPIC` are now
-`CLAUDE_HOTLINE_NTFY_TOPIC` / `CLAUDE_NOTIFS_NTFY_TOPIC`, matching the
+`CLAUDE_HOTLINE_NTFY_TOPIC` / `CLAUDE_NTFY_TOPIC`, matching the
 `CLAB_NTFY_TOPIC` / `NOMIC_NTFY_TOPIC` pair already in the shell profile. The
 old names contained no "ntfy" anywhere in `NAME=value`, so the obvious probe —
 `env | grep -i ntfy` — returned the other two and looked like proof these were

@@ -115,7 +115,7 @@ config:
 | `I_LOVE_BEING_A_USER` | `settings.json` `env` block | Your name, as hooks should use it when talking to Claude about you (fallback: "the user"). Also derives `teammate_guard`'s user bypass tag. |
 | `CLAUDE_CODE_BACKUP_REPO_NAME` | env var, **or** `backup_repo_name` in `environment.json` (generated per-machine from `env-configs/<env>.json`) | HF dataset repo for conversation backups. Required — unset means backups are skipped and `detect_env.py` warns at session start. Per-machine by design; if you'd rather not put machine names in repo names, use e.g. a keyed hash of the hostname. The HF *namespace* is resolved at runtime from your token (`whoami`). |
 | `CLAUDE_CODE_BACKUP_DISABLED` | env var | Set to anything to opt out of backups *and* the warning. |
-| `CLAUDE_NOTIFS_NTFY_TOPIC` / `CLAUDE_HOTLINE_NTFY_TOPIC` | shell profile (secret-ish, outside any repo) | ntfy.sh topics the harness instructions reference for reaching the human. Hooks only check that they're set. |
+| `CLAUDE_NTFY_TOPIC` / `CLAUDE_HOTLINE_NTFY_TOPIC` | shell profile (secret-ish, outside any repo) | ntfy.sh topics the harness instructions reference for reaching the human. Hooks only check that they're set. |
 
 ## Conventions
 
