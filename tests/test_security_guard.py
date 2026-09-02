@@ -27,7 +27,12 @@ import security_guard  # noqa: E402
 def run_guard(payload, env=None):
     # Blank the hotline topic so the suite can never emit a real alert. The one
     # test that exercises the ntfy path points NTFY_BASE_URL at a dead port.
-    child_env = {**os.environ, "CLAUDE_HOTLINE_TOPIC": "", **(env or {})}
+    child_env = {
+        **os.environ,
+        "CLAUDE_HOTLINE_NTFY_TOPIC": "",
+        "CLAUDE_HOTLINE_TOPIC": "",
+        **(env or {}),
+    }
     res = subprocess.run(
         [sys.executable, str(GUARD)],
         input=json.dumps(payload),
@@ -108,7 +113,7 @@ check("missing context degrades to '?'", "cwd: ?" in missing_ctx_body and "sessi
 # A dead port stands in for "ntfy is unreachable": the deny must survive it.
 out = run_guard(
     {"tool_name": "Bash", "tool_input": {"command": "mkfs.ext4 /dev/sdb"}},
-    env={"CLAUDE_HOTLINE_TOPIC": "test-topic", "NTFY_BASE_URL": "http://127.0.0.1:1"},
+    env={"CLAUDE_HOTLINE_NTFY_TOPIC": "test-topic", "NTFY_BASE_URL": "http://127.0.0.1:1"},
 )
 check(
     "unreachable ntfy still denies",

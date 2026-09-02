@@ -16,7 +16,8 @@ import urllib.request
 # Expand ~ and $HOME for pattern matching
 home = os.path.expanduser("~")
 
-HOTLINE_ENV = "CLAUDE_HOTLINE_TOPIC"
+HOTLINE_ENV = "CLAUDE_HOTLINE_NTFY_TOPIC"
+LEGACY_HOTLINE_ENV = "CLAUDE_HOTLINE_TOPIC"
 NTFY_BASE = os.environ.get("NTFY_BASE_URL", "https://ntfy.sh").rstrip("/")
 # ntfy's default per-message cap is 4 KiB; leave room for the surrounding fields.
 MAX_CMD_CHARS = 2000
@@ -97,7 +98,10 @@ def build_alert(description, cmd, data):
 
 def notify_hotline(description, cmd, data):
     """Best-effort out-of-band ping. Never let this stop the deny from landing."""
-    topic = os.environ.get(HOTLINE_ENV, "").strip()
+    topic = (
+        os.environ.get(HOTLINE_ENV, "").strip()
+        or os.environ.get(LEGACY_HOTLINE_ENV, "").strip()
+    )
     if not topic:
         print(
             f"{HOTLINE_ENV} unset — no out-of-band alert sent (see detect_env.py)",

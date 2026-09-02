@@ -3,6 +3,23 @@
 Append-only. What changed, why, and the gotcha — the reasoning that would
 otherwise end up as a comment in the hook.
 
+## 2026-09-01 — ntfy topic env vars renamed to a `*_NTFY_TOPIC` suffix
+
+`CLAUDE_HOTLINE_TOPIC` / `CLAUDE_NOTIFS_TOPIC` are now
+`CLAUDE_HOTLINE_NTFY_TOPIC` / `CLAUDE_NOTIFS_NTFY_TOPIC`, matching the
+`CLAB_NTFY_TOPIC` / `NOMIC_NTFY_TOPIC` pair already in the shell profile. The
+old names contained no "ntfy" anywhere in `NAME=value`, so the obvious probe —
+`env | grep -i ntfy` — returned the other two and looked like proof these were
+unset. A session concluded exactly that and reported the harness instructions
+as referencing undefined variables; a second grep of `~/.bashrc` for
+`NTFY\|ntfy` confirmed the same false negative. Every topic var now shares the
+one substring anyone greps for.
+
+`security_guard.py` keeps a `LEGACY_HOTLINE_ENV` fallback: hooks inherit the
+env of the claude process that spawned them, so sessions started before the
+rename carry only the old name and would silently lose their out-of-band
+alert. Removable once no pre-rename session is running.
+
 ## 2026-09-01 — `force_background_bash.py`: kill-class deny steps aside on a patched claude binary
 
 The `auto-background.py` patch in Butanium/claude-code-patches makes every
