@@ -76,7 +76,7 @@ def has_inflight(session_id: str, transcript_path: str) -> bool:
     if not p.exists():
         return False
     try:
-        state = json.loads(p.read_text())
+        state = json.loads(p.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return False
     # Opportunistic reconcile: stale entries (mid-call notifications,
@@ -189,7 +189,7 @@ def analyze_transcript(transcript_path: Path) -> tuple[bool, bool, bool, str]:
         return False, False, False, ""
 
     entries: list[dict] = []
-    with transcript_path.open() as f:
+    with transcript_path.open(encoding="utf-8") as f:
         for line in f:
             try:
                 entries.append(json.loads(line))
@@ -259,7 +259,7 @@ def nag_budget_exhausted(session_id: str, lead_msg_uuid: str) -> bool:
     ledger_path = STATE_ROOT / session_id / "idle_nag_ledger.json"
     ledger = {"lead": lead_msg_uuid, "count": 0}
     try:
-        prior = json.loads(ledger_path.read_text())
+        prior = json.loads(ledger_path.read_text(encoding="utf-8"))
         if prior.get("lead") == lead_msg_uuid:
             ledger = prior
     except (OSError, json.JSONDecodeError):
@@ -268,7 +268,7 @@ def nag_budget_exhausted(session_id: str, lead_msg_uuid: str) -> bool:
         return True
     ledger["count"] = ledger.get("count", 0) + 1
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
-    ledger_path.write_text(json.dumps(ledger))
+    ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
     return False
 
 

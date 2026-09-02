@@ -3,6 +3,65 @@
 Append-only. What changed, why, and the gotcha — the reasoning that would
 otherwise end up as a comment in the hook.
 
+## 2026-09-02 — Windows cp1252 killed three hooks; explicit UTF-8 everywhere
+
+Three separate hook failures on this box, one root cause and two hitchhikers.
+All three surfaced only as `<Event> hook error` + a first stderr line reading
+`Traceback (most recent call last):` — the terminal shows one line, so the
+actual exception was invisible. The full stderr *is* kept: it lands in the
+session JSONL as an attachment with `type: "hook_non_blocking_error"`, carrying
+`hookName`, `command`, `exitCode` and the whole `stderr`. That is where to look
+when a hook error has no readable cause.
+
+**cp1252, both directions.** Windows Python defaults stdout/stderr *and* text
+file IO to the ANSI code page (`locale.getencoding() == "cp1252"` here, while
+`sys.getfilesystemencoding()` is utf-8 — easy to misread as "we're fine").
+
+- `detect_env.py` printed the `⚠️` env warning and died `UnicodeEncodeError`,
+  two statements before `print(identity)` — so **every session that tripped the
+  warning silently lost its whole session-start identity block**: the greeting,
+  the model-quirks injection, the journal pointer. The hook error looked
+  cosmetic and was eating a feature.
+- `no_poll_background.py` read the transcript with the default decode and died
+  `UnicodeDecodeError: byte 0x90`. Any transcript containing an emoji or an
+  undefined-in-cp1252 byte broke the guard.
+
+Fixed by `utils/_encoding.py::utf8_stdio()` (reconfigures stdout/stderr; call it
+before printing non-ASCII) plus an explicit `encoding="utf-8"` on every text
+`open()` / `read_text()` / `write_text()` in the package. `open()`'s default
+cannot be changed from inside the process, so the explicit encoding is the fix,
+not a belt-and-braces. Note cp1252 round-trips most UTF-8 byte sequences
+unharmed (read→mojibake→write gives the original bytes back), which is why
+CLAUDE.md generation *appeared* to work: the bug only bites on the bytes cp1252
+leaves undefined (0x81, 0x8D, 0x8F, 0x90, 0x9D).
+
+**`os.getuid()` in `force_background_bash.py`** — no such attribute on Windows,
+so `binary_backgrounds_everything()` raised `AttributeError` and the whole hook
+died on every Bash call in the kill class. Now guarded with `hasattr`; Windows
+gets each user their own temp dir anyway.
+
+**And with that path finally executing, two more bugs behind it**, both making a
+patched binary read as unpatched (so kill-class commands got denied instead of
+clamped):
+
+1. This file's copy of the Bun-graph parser hard-coded the POSIX virtual-FS
+   prefix `/$bunfs/`. Same bug the patches repo fixed in `_bungraph.py` on
+   2026-09-02 — the copy here never got it. Now `_NAME_PREFIXES`, mirroring
+   `NAME_PREFIXES` upstream. **This parser is duplicated across two repos and
+   drifted; changes to either must be mirrored.**
+2. `shutil.which("claude")` resolves to `…/commands/claude.CMD`, a one-line
+   Windows launcher shim with no module graph in it. Added `_claude_binary()`,
+   which dereferences the shim and falls back to `~/.local/bin/claude[.exe]`,
+   mirroring `candidate_binaries()` in the patches repo.
+
+**`check_env_vars()` false positive.** It required the post-rename names only,
+so a box exporting the pre-rename `CLAUDE_NOTIFS_TOPIC` / `CLAUDE_HOTLINE_TOPIC`
+— which `security_guard.py` still honours, and which CLAUDE.template.md still
+tells agents to use — was warned at as unconfigured. That bogus warning is what
+carried the `⚠️` that killed the hook. `LEGACY_ALIASES` now accepts both.
+Open question for the template: it documents the old names, so either it or the
+shell profile should move to the `*_NTFY_TOPIC` pair.
+
 ## 2026-09-01 — ntfy topic env vars renamed to a `*_NTFY_TOPIC` suffix
 
 `CLAUDE_HOTLINE_TOPIC` / `CLAUDE_NOTIFS_TOPIC` are now

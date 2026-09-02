@@ -41,7 +41,7 @@ def last_is_api_error(entry: dict | None) -> bool:
 def last_non_synthetic_assistant_text(transcript_path: str) -> str:
     """Most recent assistant text whose model is not '<synthetic>'."""
     last = ""
-    with open(transcript_path) as f:
+    with open(transcript_path, encoding="utf-8") as f:
         for line in f:
             try:
                 obj = json.loads(line)

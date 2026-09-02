@@ -110,7 +110,7 @@ def main() -> None:
     if not inbox_p.exists():
         return
     try:
-        inbox = json.loads(inbox_p.read_text())
+        inbox = json.loads(inbox_p.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return
 

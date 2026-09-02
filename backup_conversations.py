@@ -112,7 +112,7 @@ def resolve_repo_name() -> str:
     env_json = CLAUDE_DIR / "environment.json"
     if env_json.exists():
         try:
-            return str(json.loads(env_json.read_text()).get("backup_repo_name", "") or "").strip()
+            return str(json.loads(env_json.read_text(encoding="utf-8")).get("backup_repo_name", "") or "").strip()
         except (json.JSONDecodeError, OSError):
             return ""
     return ""
@@ -128,7 +128,7 @@ def needs_backup() -> bool:
     """Return True if today's backup hasn't been done yet."""
     if not STAMP_FILE.exists():
         return True
-    data = json.loads(STAMP_FILE.read_text())
+    data = json.loads(STAMP_FILE.read_text(encoding="utf-8"))
     last = data.get("last_backup_date", "")
     return last != datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -170,7 +170,7 @@ def get_or_create_collection(api, namespace: str) -> str:
     Cached in COLLECTION_SLUG_FILE so subsequent runs skip the list/create call.
     """
     if COLLECTION_SLUG_FILE.exists():
-        slug = COLLECTION_SLUG_FILE.read_text().strip()
+        slug = COLLECTION_SLUG_FILE.read_text(encoding="utf-8").strip()
         if slug:
             return slug
 
@@ -178,7 +178,7 @@ def get_or_create_collection(api, namespace: str) -> str:
         if c.title == COLLECTION_TITLE:
             log(f"Found existing collection {c.slug}")
             COLLECTION_SLUG_FILE.parent.mkdir(parents=True, exist_ok=True)
-            COLLECTION_SLUG_FILE.write_text(c.slug)
+            COLLECTION_SLUG_FILE.write_text(c.slug, encoding="utf-8")
             return c.slug
 
     log(f"Creating private collection '{COLLECTION_TITLE}' under {namespace}")
@@ -189,7 +189,7 @@ def get_or_create_collection(api, namespace: str) -> str:
         private=True,
     )
     COLLECTION_SLUG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    COLLECTION_SLUG_FILE.write_text(collection.slug)
+    COLLECTION_SLUG_FILE.write_text(collection.slug, encoding="utf-8")
     return collection.slug
 
 
@@ -308,7 +308,7 @@ def do_backup() -> str:
 
     if not missing:
         STAMP_FILE.parent.mkdir(parents=True, exist_ok=True)
-        STAMP_FILE.write_text(json.dumps({"last_backup_date": today}))
+        STAMP_FILE.write_text(json.dumps({"last_backup_date": today}), encoding="utf-8")
         return f"Up to date ({len(local_files)} files, 0 to upload)"
 
     n_batches = (len(missing) + BATCH_SIZE - 1) // BATCH_SIZE
@@ -352,7 +352,7 @@ def do_backup() -> str:
     # run picks up new transcripts rather than re-attempting the same flagged files.
     if completed_all_batches:
         STAMP_FILE.parent.mkdir(parents=True, exist_ok=True)
-        STAMP_FILE.write_text(json.dumps({"last_backup_date": today}))
+        STAMP_FILE.write_text(json.dumps({"last_backup_date": today}), encoding="utf-8")
         log("Stamp file written")
     grand_redact = ", ".join(f"{k}:{v}" for k, v in redaction_grand_total.items()) or "none"
     suffix = (

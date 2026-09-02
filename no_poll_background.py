@@ -147,7 +147,7 @@ def main() -> None:
 
     # No try/except: transcript_path was provided, so an unreadable or corrupt
     # transcript is an anomaly worth seeing, not silently swallowing.
-    with open(transcript) as f:
+    with open(transcript, encoding="utf-8") as f:
         records = [json.loads(line) for line in f if line.strip()]
     dumps = [json.dumps(rec) for rec in records]
 

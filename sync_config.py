@@ -253,7 +253,7 @@ def main():
 
     success, message, warnings = sync_config()
 
-    with open(LOG_FILE, "w") as f:
+    with open(LOG_FILE, "w", encoding="utf-8") as f:
         f.write("\n".join([message, *warnings]) + "\n")
 
     # stdout on SessionStart lands in the session's context — that is where a skipped

@@ -158,7 +158,7 @@ def wait_for_transcript_flush(transcript_path: str, debug_dir: str | None = None
             rand_suffix = ''.join(random.choices(string.ascii_lowercase, k=6))
             os.makedirs(debug_dir, exist_ok=True)
             last_4 = _get_last_n_entries(transcript_path, 4)
-            with open(f"{debug_dir}/{int(time.time())}_{rand_suffix}_poll.json", "w") as f:
+            with open(f"{debug_dir}/{int(time.time())}_{rand_suffix}_poll.json", "w", encoding="utf-8") as f:
                 json.dump({
                     "wait_s": wait,
                     "has_model": has_model,
@@ -179,7 +179,7 @@ def wait_for_transcript_flush(transcript_path: str, debug_dir: str | None = None
             os.makedirs(forensic_dir, exist_ok=True)
             rand = ''.join(random.choices(string.ascii_lowercase, k=6))
             log_path = os.path.join(forensic_dir, f"{int(time.time())}_{rand}.json")
-            with open(log_path, "w") as f:
+            with open(log_path, "w", encoding="utf-8") as f:
                 json.dump({
                     "transcript_path": transcript_path,
                     "succeeded": success,
@@ -212,7 +212,7 @@ def count_assistant_entries_from_offset(transcript_path: str, byte_offset: int) 
 def get_last_assistant_text(transcript_path: str) -> str:
     """Read transcript JSONL and return the last assistant message text."""
     last_text = ""
-    with open(transcript_path) as f:
+    with open(transcript_path, encoding="utf-8") as f:
         for line in f:
             obj = json.loads(line)
             if obj.get("type") != "assistant":
@@ -259,7 +259,7 @@ def get_last_user_text(transcript_path: str, skip_task_notifications: bool = Fal
     an important human message that a notification landed after gets masked.
     """
     last_text = ""
-    with open(transcript_path) as f:
+    with open(transcript_path, encoding="utf-8") as f:
         for line in f:
             obj = json.loads(line)
             if obj.get("type") != "user":

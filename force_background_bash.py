@@ -73,6 +73,11 @@ _GIT_TEST = b"&&!/git/i.test("
 _PATCHED_RE = re.compile(rb"=!(\w+)&&!0(?:/\*[a-z]*\*/| *),(\w+)=!\1$")
 _TRAILER = b"\n---- Bun! ----\n"
 _REC = 52
+# Module names are paths in Bun's embedded virtual filesystem, whose root is
+# platform-dependent — hard-coding the POSIX one made every base candidate look
+# wrong on Windows, so the graph never parsed and every patched binary read as
+# unpatched. Kept in sync with NAME_PREFIXES in the patches repo's _bungraph.py.
+_NAME_PREFIXES = (b"/$bunfs/", b"B:/~BUN/", b"B:\\~BUN\\")
 
 
 def _bun_module_bytecode_len(data, off):
@@ -93,7 +98,8 @@ def _bun_module_bytecode_len(data, off):
             tbl = p + 8 + mp_off
             if tbl + mp_len <= len(data):
                 noff, nlen = struct.unpack_from("<II", data, tbl)
-                if 0 < nlen < 512 and data[p + 8 + noff : p + 8 + noff + 8] == b"/$bunfs/":
+                name = data[p + 8 + noff : p + 8 + noff + 8]
+                if 0 < nlen < 512 and name.startswith(_NAME_PREFIXES):
                     base = p + 8
                     break
         p -= 512
@@ -119,10 +125,44 @@ def _inspect_binary(path):
     return False
 
 
+_SHIM_SUFFIXES = (".cmd", ".bat", ".ps1")
+_SHIM_EXE_RE = re.compile(r'"?([a-zA-Z]:\\[^"\r\n]*?claude\.exe)"?')
+
+
+def _claude_binary():
+    """Path of the live claude bundle, or None.
+
+    `which claude` can land on a Windows launcher shim — a one-line .cmd that
+    execs the real .exe — which carries no Bun module graph at all, so scanning
+    it makes a patched install read as unpatched. Dereference the shim, then
+    fall back to the native-installer location the way the patches repo's
+    `candidate_binaries()` does.
+    """
+    override = os.environ.get("FORCE_BACKGROUND_BASH_CLAUDE_BIN")
+    if override:
+        return override
+    which = shutil.which("claude")
+    if which:
+        if os.path.splitext(which)[1].lower() in _SHIM_SUFFIXES:
+            with open(which, encoding="utf-8", errors="replace") as f:
+                m = _SHIM_EXE_RE.search(f.read())
+            if m and os.path.isfile(m.group(1)):
+                return m.group(1)
+        else:
+            return which
+    for cand in (
+        os.path.expanduser("~/.local/bin/claude.exe"),
+        os.path.expanduser("~/.local/bin/claude"),
+    ):
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
 def binary_backgrounds_everything():
     """True iff the claude binary in use carries the auto-background patch and
     the patched module actually runs from source."""
-    path = os.environ.get("FORCE_BACKGROUND_BASH_CLAUDE_BIN") or shutil.which("claude")
+    path = _claude_binary()
     if not path:
         return False
     try:
@@ -131,9 +171,12 @@ def binary_backgrounds_everything():
     except OSError:
         return False
     key = [path, st.st_size, int(st.st_mtime)]
-    cache = os.path.join(tempfile.gettempdir(), f"force_background_bash_patch_{os.getuid()}.json")
+    # Unix /tmp is shared, so the cache name carries the uid to keep users apart.
+    # Windows has no os.getuid() and hands each user their own temp dir anyway.
+    uid = os.getuid() if hasattr(os, "getuid") else ""
+    cache = os.path.join(tempfile.gettempdir(), f"force_background_bash_patch_{uid}.json")
     try:
-        with open(cache) as f:
+        with open(cache, encoding="utf-8") as f:
             c = json.load(f)
         if c.get("key") == key:
             return bool(c.get("patched"))
@@ -145,7 +188,7 @@ def binary_backgrounds_everything():
         return False
     try:
         tmp = cache + f".{os.getpid()}"
-        with open(tmp, "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"key": key, "patched": patched}, f)
         os.replace(tmp, cache)
     except OSError:

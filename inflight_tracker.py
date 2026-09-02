@@ -60,7 +60,7 @@ def read_state(session_id: str) -> dict:
     if not p.exists():
         return {k: [] for k in EMPTY_STATE}
     try:
-        s = json.loads(p.read_text())
+        s = json.loads(p.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return {k: [] for k in EMPTY_STATE}
     for k in EMPTY_STATE:
@@ -78,7 +78,7 @@ def write_state(session_id: str, state: dict) -> None:
     p = state_path(session_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(state, indent=2))
+    tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
     tmp.replace(p)
 
 

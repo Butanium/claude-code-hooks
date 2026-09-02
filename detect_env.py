@@ -8,6 +8,7 @@ import socket
 import sys
 from pathlib import Path
 
+from utils._encoding import utf8_stdio
 from utils._user import ENV_VAR as USER_NAME_VAR, user_name
 
 CLAUDE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
@@ -34,7 +35,7 @@ def detect_env() -> str:
     if not RULES_FILE.exists():
         return "default"
 
-    config = json.loads(RULES_FILE.read_text())
+    config = json.loads(RULES_FILE.read_text(encoding="utf-8"))
 
     for rule in config.get("rules", []):
         if check_rule(rule):
@@ -57,7 +58,7 @@ def deep_merge(parent: dict, child: dict) -> dict:
 def load_env_json(env: str) -> dict:
     """Load env .json, walking the `extends` chain. Child overrides parent (deep merge)."""
     json_file = ENV_CONFIGS / f"{env}.json"
-    data = json.loads(json_file.read_text()) if json_file.exists() else {}
+    data = json.loads(json_file.read_text(encoding="utf-8")) if json_file.exists() else {}
     parent = data.pop("extends", None)
     if parent:
         return deep_merge(load_env_json(parent), data)
@@ -68,10 +69,10 @@ def load_env_md(env: str) -> str:
     """Load env .md, falling back to parent (`extends`) if missing."""
     md_file = ENV_CONFIGS / f"{env}.md"
     if md_file.exists():
-        return md_file.read_text()
+        return md_file.read_text(encoding="utf-8")
     json_file = ENV_CONFIGS / f"{env}.json"
     if json_file.exists():
-        parent = json.loads(json_file.read_text()).get("extends")
+        parent = json.loads(json_file.read_text(encoding="utf-8")).get("extends")
         if parent:
             return load_env_md(parent)
     return f"# Environment: {env}\n(no config file found)"
@@ -117,7 +118,7 @@ def resolve_includes(text: str) -> str:
             # stdout → relayed into the agent's context at session start
             print(f"⚠️  CLAUDE.md include not found: {raw} (from {TEMPLATE_FILE.name})")
             return f"*(include not found: `{raw}`)*"
-        content = path.read_text().strip()
+        content = path.read_text(encoding="utf-8").strip()
         return content if content else f"*(nothing here yet — `{raw}` is empty)*"
 
     return re.sub(r"\{\{INCLUDE:([^}\n]+)\}\}", replace, text)
@@ -132,10 +133,25 @@ def load_model_quirks(model: str) -> str | None:
     for name in (model, model_key(model)):
         f = MODEL_QUIRKS / f"{name}.md"
         if f.exists():
-            text = strip_html_comments(f.read_text()).strip()
+            text = strip_html_comments(f.read_text(encoding="utf-8")).strip()
             if text:
                 return text
     return None
+
+
+# Pre-rename names, still honoured by security_guard.py (LEGACY_HOTLINE_ENV) and
+# still the names CLAUDE.template.md tells agents to use. A box that exported
+# those is configured, not missing — warning about it was a false positive, and
+# the `⚠️` in that warning is what took the whole session-start block down.
+LEGACY_ALIASES = {
+    "CLAUDE_NTFY_TOPIC": "CLAUDE_NOTIFS_TOPIC",
+    "CLAUDE_HOTLINE_NTFY_TOPIC": "CLAUDE_HOTLINE_TOPIC",
+}
+
+
+def env_var_set(name: str) -> bool:
+    """True if `name` — or the pre-rename name it replaced — is set."""
+    return any(os.environ.get(n, "").strip() for n in (name, LEGACY_ALIASES.get(name)) if n)
 
 
 def check_env_vars(env_data: dict) -> str | None:
@@ -152,7 +168,7 @@ def check_env_vars(env_data: dict) -> str | None:
         "CLAUDE_HOTLINE_NTFY_TOPIC": "ntfy topic for urgent contact when the harness path is unavailable",
         USER_NAME_VAR: "the human's name — hooks fall back to 'the user' in their messages",
     }
-    missing = [name for name in expected if not os.environ.get(name, "").strip()]
+    missing = [name for name in expected if not env_var_set(name)]
     # Backup repo name can come from the env var OR env-configs (per-machine);
     # CLAUDE_CODE_BACKUP_DISABLED is the explicit "no backups, stop warning me" opt-out.
     backup_configured = bool(
@@ -180,12 +196,15 @@ def check_env_vars(env_data: dict) -> str | None:
 
 
 def main():
+    # The warning below and the quirk files further down are full of non-ASCII;
+    # on a cp1252 console every one of those prints is a crash otherwise.
+    utf8_stdio()
     model = json.loads(sys.stdin.read()).get("model") if not sys.stdin.isatty() else None
     env = detect_env()
     env_config = load_env_md(env)
 
     if TEMPLATE_FILE.exists():
-        template = TEMPLATE_FILE.read_text()
+        template = TEMPLATE_FILE.read_text(encoding="utf-8")
         # Comments in the template are kept-for-history text (e.g. retired rules);
         # strip them so the generated CLAUDE.md doesn't load disabled guidance.
         # Includes resolve after ENV_CONFIG so env-configs can use {{INCLUDE:}} too.
@@ -193,7 +212,7 @@ def main():
             resolve_includes(template.replace("{{ENV_CONFIG}}", env_config))
         )
         header = "<!-- DO NOT EDIT — generated from CLAUDE.template.md by detect_env.py. Edit the template instead. -->\n\n"
-        OUTPUT_FILE.write_text(header + output)
+        OUTPUT_FILE.write_text(header + output, encoding="utf-8")
         print(f"Generated CLAUDE.md for environment: {env}", file=sys.stderr)
     else:
         print("Error: CLAUDE.template.md not found", file=sys.stderr)
@@ -201,7 +220,7 @@ def main():
 
     env_data = load_env_json(env)
     env_data["env"] = env
-    ENV_JSON_OUTPUT.write_text(json.dumps(env_data, indent=2) + "\n")
+    ENV_JSON_OUTPUT.write_text(json.dumps(env_data, indent=2) + "\n", encoding="utf-8")
     print(f"Generated environment.json for environment: {env}", file=sys.stderr)
 
     env_warning = check_env_vars(env_data)
