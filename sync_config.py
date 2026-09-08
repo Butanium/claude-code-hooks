@@ -14,6 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from utils._encoding import utf8_stdio
+
 CLAUDE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
 LOG_FILE = CLAUDE_DIR / "debug" / "sync.log"
 # git pathspec, applied from the repo root: `*` crosses directory boundaries,
@@ -26,6 +28,8 @@ def git(*args: str, timeout: int = 10) -> subprocess.CompletedProcess:
         ["git", "-C", str(CLAUDE_DIR), *args],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
     )
 
@@ -57,7 +61,12 @@ def commit_journals() -> str | None:
 
 def git_in(path: Path, *args: str, timeout: int = 15) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", "-C", str(path), *args], capture_output=True, text=True, timeout=timeout
+        ["git", "-C", str(path), *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
     )
 
 
@@ -249,6 +258,7 @@ def sync_config() -> tuple[bool, str, list[str]]:
 
 
 def main():
+    utf8_stdio()
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     success, message, warnings = sync_config()

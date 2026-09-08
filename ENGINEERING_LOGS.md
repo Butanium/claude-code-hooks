@@ -3,6 +3,28 @@
 Append-only. What changed, why, and the gotcha — the reasoning that would
 otherwise end up as a comment in the hook.
 
+## 2026-09-07 — `sync_config.py` was the fourth cp1252 casualty; plus a global `PYTHONUTF8`
+
+The 2026-09-02 sweep below fixed the three hooks that *crashed*. `sync_config.py`
+never crashed, so it was missed — cp1252 happens to have an em-dash at 0x97, so
+its `— skipped` warnings encoded fine and only *rendered* as `�`, because Claude
+Code decodes hook stdout as UTF-8. Silent corruption instead of a traceback is
+why it survived the sweep. Now calls `utf8_stdio()` in `main()`.
+
+Its two `subprocess.run(text=True)` git helpers had the mirror bug — git emits
+UTF-8, the default decode was cp1252 — so any accented path or commit message
+would have come back mojibake in `Synced: ...`. Both now pass
+`encoding="utf-8", errors="replace"`.
+
+Also set `PYTHONUTF8=1` in `settings.json` `env` as a backstop: it makes UTF-8
+mode the default for every hook and every `subprocess` text pipe at once, so a
+new hook that forgets `utf8_stdio()` is not a new bug. It does not replace the
+per-hook calls — a hook run outside the Claude env (manually, from cron) still
+needs its own. Upgrading Python would not have helped: `uv run --project hooks`
+uses a uv-managed 3.13, unrelated to system Python, and UTF-8-by-default (PEP
+686) is not in any release we can pin yet. `PYTHONUTF8=1` is what that default
+will do anyway, so there is nothing to unwind later.
+
 ## 2026-09-02 — Windows cp1252 killed three hooks; explicit UTF-8 everywhere
 
 Three separate hook failures on this box, one root cause and two hitchhikers.
