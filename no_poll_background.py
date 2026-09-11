@@ -12,8 +12,13 @@ read if EITHER "it's fine to read now" signal holds:
       launching the task — it's not in the tight poll loop this guard exists to
       break, so a deliberate read is fine even if (a) wasn't detected.
 
-Deny only when NEITHER holds (task launched in this transcript, no notification yet,
-no end_turn since launch) — that's the actual doom-loop.
+Deny only when NEITHER holds (task launched BY THE AGENT in this transcript, no
+notification yet, no end_turn since launch) — that's the actual doom-loop.
+
+A task the USER launched with a `!` command is never the agent's poll loop, so it
+always allows: the harness backgrounds such a command when it outlives its sync
+timeout, and an interactive one then sits on a prompt it can no longer be fed,
+so the completion notification this guard promises may never arrive.
 
 Why both arms: notifications flush at tool_use boundaries, not only after end_turn, so
 an end_turn-only check denied legitimate post-notification reads by a streaking agent
@@ -90,6 +95,22 @@ def _is_assistant(rec: dict) -> bool:
         return True
     msg = rec.get("message")
     return isinstance(msg, dict) and msg.get("role") == "assistant"
+
+
+def _is_local_command(rec: dict) -> bool:
+    """True for a record produced by the USER running a `!`-prefixed command.
+
+    Those land as a plain-string user message wrapping <bash-input>/<bash-stdout>;
+    the agent's own launches land as tool_result content blocks instead. The
+    distinction matters because the harness backgrounds a `!` command that
+    outlives its sync timeout, printing the same "ID: <id>" line — which is not
+    an agent launch and must not be read as one.
+    """
+    msg = rec.get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if not isinstance(content, str):
+        return False
+    return "<bash-stdout>" in content or "<bash-input>" in content
 
 
 def _assistant_text(rec: dict) -> str:
@@ -170,6 +191,15 @@ def main() -> None:
     if launch_i is None:
         return
 
+    # Whose task is it? Decided by that EARLIEST mention, because every later
+    # mention includes the agent's own reads of it — scanning past a `!` record
+    # would re-attribute a user's task to the agent the moment it read the file
+    # once. A task the user launched is never the agent's poll loop, and an
+    # interactive one parked on a prompt it can no longer be fed may never send
+    # the completion notification this guard tells the agent to wait for.
+    if _is_local_command(records[launch_i]):
+        return
+
     # ARM (b) — has the assistant yielded (end_turn) at least once since launching it?
     # A yield means it's not in the tight no-stop poll loop this guard breaks, so a
     # deliberate read is fine.
@@ -182,7 +212,7 @@ def main() -> None:
             "continue": False,
             "stopReason": (
                 f"FORCED-STOP-NO-POLL: you re-read the still-running task {task_id} "
-                "immediately after being denied, with no yield in between. The turn has "
+                "after being denied, with no yield in between. The turn has "
                 "been force-ended so you stop looping. You'll be woken when the task "
                 "completes."
             ),
