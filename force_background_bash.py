@@ -19,7 +19,12 @@
 Auto-backgroundability (CLI v2.1.216, re-probed on v2.1.250; undocumented,
 details in https://github.com/anthropics/claude-code/issues/79879): the CLI's
 static shell analyzer must fully decompose the command, no git subcommand,
-first word not sleep. KILL_CLASS_RE + is_kill_class approximate the
+first word not sleep. NOTE 2.1.270 replaced that analyzer with a first-word
+blocklist that holds only `sleep`, so on >=2.1.270 KILL_CLASS_RE is far more
+conservative than the CLI is — it denies-with-advice for heredoc/redirect
+shapes the CLI would now happily background. Safe (a false positive only costs
+an advisory deny) but worth re-probing before trusting the deny branch.
+KILL_CLASS_RE + is_kill_class approximate the
 analyzer's rejections we verified empirically: $VAR/backtick redirect
 targets, process substitution, and heredocs *except* the one shape that
 decomposes — quoted delimiter with every redirect placed before the operator
@@ -65,12 +70,17 @@ GIT_RE = re.compile(r"(?:^|[;&|(]|\$\(|`)\s*(?:command\s+|builtin\s+)?git\b")
 SLEEP_RE = re.compile(r"^\s*sleep\b")
 
 # --- detection of the auto-background CLI patch -------------------------------
-# Stock Bash tool site: `X=!cn&&pred(cmd),Y=!cn&&!/git/i.test(cmd)`; the patch
-# turns `pred(cmd)` into `!0` (+ a same-length comment). The `/git/i.test(`
-# literal is the stable anchor (it also occurs at the PowerShell site, whose
-# predicate is `await …` and so never matches the stock/patched shapes).
-_GIT_TEST = b"&&!/git/i.test("
-_PATCHED_RE = re.compile(rb"=!(\w+)&&!0(?:/\*[a-z]*\*/| *),(\w+)=!\1$")
+# Stock Bash tool site: `X=!cn&&pred(cmd),…,T=helper({…,canAutoBackground:X})`;
+# the patch turns `pred(cmd)` into `!0` (+ a same-length comment). Anchored on
+# the `canAutoBackground:` property name, which survives identifier renames —
+# the previous anchor was the `&&!/git/i.test(` literal beside it, and 2.1.270
+# deleted that test, which silently made every patched binary read as unpatched.
+# Kept in sync with `patches/auto-background.py` in the patches repo.
+# `[\w$]` throughout: minified names may contain `$`.
+_FLAG = b"canAutoBackground:"
+_FLAG_RE = re.compile(re.escape(_FLAG) + rb"([A-Za-z_$][\w$]*)[,}]")
+_PATCHED_TAIL = rb"=![\w$]+&&!0(?:/\*[a-z]*\*/| *),"
+_FLAG_WINDOW = 400
 _TRAILER = b"\n---- Bun! ----\n"
 _REC = 52
 # Module names are paths in Bun's embedded virtual filesystem, whose root is
@@ -117,11 +127,11 @@ def _bun_module_bytecode_len(data, off):
 def _inspect_binary(path):
     with open(path, "rb") as f:
         data = f.read()
-    pos = 0
-    while (i := data.find(_GIT_TEST, pos)) != -1:
-        if _PATCHED_RE.search(data, max(0, i - 80), i):
-            return _bun_module_bytecode_len(data, i) == 0
-        pos = i + 1
+    for m in _FLAG_RE.finditer(data):
+        assign = re.compile(rb"(?<![\w$])" + re.escape(m.group(1)) + _PATCHED_TAIL)
+        a = assign.search(data, max(0, m.start() - _FLAG_WINDOW), m.start())
+        if a:
+            return _bun_module_bytecode_len(data, a.start()) == 0
     return False
 
 

@@ -3,6 +3,42 @@
 Append-only. What changed, why, and the gotcha — the reasoning that would
 otherwise end up as a comment in the hook.
 
+## 2026-09-12 — `force_background_bash.py`'s patch detector broke silently on 2.1.270
+
+`binary_backgrounds_everything()` decides whether the CLI still has a kill class
+at all. It looked for the patched shape beside the literal `&&!/git/i.test(`,
+because on 2.1.250 the Bash tool computed its two flags side by side:
+
+    Pt=!cn&&obr(Ce),gn=!cn&&!/git/i.test(Ce)
+
+2.1.270 deleted that git test (`Xt=!Wn` now), so the anchor vanished from the
+binary entirely. Nothing failed: the scan simply found no occurrence and
+returned `False`, i.e. *every* patched binary read as unpatched, and the hook
+went back to denying commands the patched CLI backgrounds perfectly well. A
+detector whose negative result is indistinguishable from "genuinely unpatched"
+is the failure mode to watch for here — there is no error to notice.
+
+Now anchored on the property name `canAutoBackground:`, which is what the flag
+is actually *for* and survives identifier renames: capture the flag's minified
+name from it, then require that name's `=!<x>&&!0/*…*/,` assignment within 400B
+before. Same anchor as `patches/auto-background.py` in the patches repo, and the
+two must be re-anchored in lockstep — the hook is the only consumer that can
+disagree with the patch about whether the patch is applied. Verified both ways
+against the live binary (patched → True) and its pristine `.orig` (→ False);
+`tests/test_force_background_bash.py` covers the pair.
+
+Also `[\w$]` rather than `\w` for minified identifiers throughout. Minifiers
+hand out `$`-containing names once the short pool runs out, and `\w` excludes
+`$` — the same build renamed a local to `$e` in another module and killed a
+patch in the patches repo the same way.
+
+Second-order, not yet acted on: 2.1.270 also replaced the CLI's static shell
+analyzer with a one-entry first-word blocklist (`["sleep"]`), so `KILL_CLASS_RE`
+now over-approximates badly — it denies-with-advice for heredoc and redirect
+shapes the CLI would background fine. That direction is safe (an advisory deny
+costs a round trip, not work), so it is noted in the docstring rather than
+rewritten blind; re-probe before trusting the deny branch.
+
 ## 2026-09-07 — `sync_config.py` was the fourth cp1252 casualty; plus a global `PYTHONUTF8`
 
 The 2026-09-02 sweep below fixed the three hooks that *crashed*. `sync_config.py`
