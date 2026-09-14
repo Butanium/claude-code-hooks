@@ -59,15 +59,24 @@ JUDGE_ENV_KEEP = (
 # Modes where a permission prompt has nobody to answer it.
 NO_PROMPT_MODES = {"bypassPermissions", "dontAsk"}
 
+NOTE_ROUTES = ("stored", "clement-later", "clement-now", "clement-urgent")
 VERDICT_SCHEMA = {
     "type": "object",
     "properties": {
         "ok": {"type": "boolean"},
         "reason": {"type": "string"},
         "note": {"type": "string"},
+        "note_route": {"type": "string", "enum": list(NOTE_ROUTES)},
     },
     "required": ["ok", "reason"],
 }
+# Every note is appended here with its route; `*_journal.md` files anywhere in the
+# config repo are auto-committed by sync_config.py, so notes follow the human across
+# machines and sit next to the journals he already reads.
+NOTES_FILE = Path(
+    os.environ.get("CLAUDE_GUARD_NOTES_FILE")
+    or Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "agents" / "remote-script-judge_journal.md"
+)
 
 # Root or a home directory as a COMPLETE argument — `/`, `~`, `$HOME`, the expanded home,
 # each optionally with a trailing slash, and nothing after it. Deliberately not a prefix:
@@ -189,7 +198,7 @@ def ntfy_post(topic, title, body, priority="default", tags="rotating_light"):
         with urllib.request.urlopen(req, timeout=5) as resp:
             return 200 <= resp.status < 300
     except Exception as exc:  # network is a boundary; the decision matters more
-        print(f"ntfy failed ({exc!r}) — decision still applied", file=sys.stderr)
+        print(f"ntfy failed for topic {topic} ({exc!r}) — decision still applied", file=sys.stderr)
         return False
 
 
@@ -214,14 +223,46 @@ def notify_hotline(description, cmd, data, extra=""):
     return ntfy_post(topic, title, body, priority="high")
 
 
-def notify_note(note, cmd, data):
-    """A judge note on an allowed command: regular topic, normal priority."""
-    topic = os.environ.get(NOTES_ENV, "").strip() or hotline_topic()
+def notify_note(note, route, cmd, data):
+    """`clement-now` goes to the regular topic; `clement-urgent` to the hotline, high priority."""
+    if route == "clement-urgent":
+        topic, priority = hotline_topic(), "urgent"
+    else:
+        topic, priority = os.environ.get(NOTES_ENV, "").strip() or hotline_topic(), "default"
     if not topic:
-        print(f"{NOTES_ENV} unset — judge note not forwarded: {note}", file=sys.stderr)
+        print(f"no ntfy topic for a {route} judge note — not forwarded: {note}", file=sys.stderr)
         return False
     _, body = build_alert("", cmd, data)
-    return ntfy_post(topic, "remote-script-judge note", f"{note}\n\n{body}", tags="speech_balloon")
+    return ntfy_post(topic, f"remote-script-judge note ({route})", f"{note}\n\n{body}", priority=priority, tags="speech_balloon")
+
+
+def store_note(verdict, cmd, data):
+    """Append the note to the journal. Never let a write failure reach the decision."""
+    one_line = " ".join(cmd.split())
+    entry = "\n".join([
+        f"## {time.strftime('%Y-%m-%d %H:%M', time.gmtime())} UTC — {verdict['note_route']} — ok={str(verdict['ok']).lower()}",
+        f"- session: {data.get('session_id') or '?'} · cwd: {data.get('cwd') or '?'} · host: {socket.gethostname()}",
+        f"- command: `{one_line[:400]}`" + (" …" if len(one_line) > 400 else ""),
+        f"- reason: {verdict['reason']}",
+        f"- note: {verdict['note']}",
+        "",
+        "",
+    ])
+    try:
+        NOTES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        if not NOTES_FILE.exists():
+            NOTES_FILE.write_text(
+                "# remote-script-judge notes\n\nAppended by `hooks/security_guard.py` whenever the judge leaves a note. "
+                "Route `clement-later` means Clément should read it next time he looks into the hook; "
+                "`clement-now` / `clement-urgent` were also sent over ntfy at the time.\n\n",
+                encoding="utf-8",
+            )
+        with NOTES_FILE.open("a", encoding="utf-8") as fh:
+            fh.write(entry)
+        return True
+    except OSError as exc:
+        print(f"could not store judge note ({exc!r}): {verdict['note']}", file=sys.stderr)
+        return False
 
 
 # --- stage 2: fetch + judge -----------------------------------------------------------
@@ -351,6 +392,8 @@ def run_judge(user_msg, agent):
     if not isinstance(verdict, dict) or not isinstance(verdict.get("ok"), bool) or not isinstance(verdict.get("reason"), str):
         raise JudgeUnavailable(f"judge returned no schema-conformant verdict: {str(out)[:300]}")
     verdict["note"] = (verdict.get("note") or "").strip()
+    route = verdict.get("note_route")
+    verdict["note_route"] = route if route in NOTE_ROUTES else "stored"
     return verdict
 
 
@@ -403,13 +446,16 @@ def handle_judged(description, cmd, data):
 
     out = decide_judged(verdict, error, data.get("permission_mode"), saved_path)
     note = verdict["note"] if verdict else ""
+    if note:
+        store_note(verdict, cmd, data)
     if "permissionDecision" in out["hookSpecificOutput"]:
+        # The human is being paged anyway; the note rides along whatever its route.
         extra = out["hookSpecificOutput"]["permissionDecisionReason"]
         if note:
-            extra += f"\n\njudge note: {note}"
+            extra += f"\n\njudge note ({verdict['note_route']}): {note}"
         notify_hotline(description, cmd, data, extra=extra)
-    elif note:
-        notify_note(note, cmd, data)
+    elif note and verdict["note_route"] in ("clement-now", "clement-urgent"):
+        notify_note(note, verdict["note_route"], cmd, data)
     print(json.dumps(out))
 
 

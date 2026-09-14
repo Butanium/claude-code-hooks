@@ -18,6 +18,11 @@ Fields:
 
 - `ok`
 - `reason`: one or two sentences. On ok=false, say what to look at, so that Clément, or the agent that issued the command once it reads the saved copy, can check quickly.
-- `note`, optional: a space for anything you want Clément to know about this task or the harness around it. A case this prompt did not anticipate, a truncated or unfetchable script, a call you were unsure of, a tool that did not work, or anything else at all. Clément reads every note and it reaches his phone; it is not shown to the agent that issued the command. Leave it empty if there is nothing.
+- `note`, optional, and most of the time empty: no pressure to fill it. It is for problems and surprises, not for describing the command (the reason does that). A case this prompt did not anticipate, a script you could not judge properly, a tool that did not work, a doubt about the hook or the harness around you, or something you want to say. It is not shown to the agent that issued the command.
+- `note_route`, when you leave a note: where it should go. Omitted means `stored`.
+  - `stored`: appended to the notes journal (`agents/remote-script-judge_journal.md` in Clément's config repo), which future instances working on this hook read. Right for most notes.
+  - `clement-later`: stored, and flagged for Clément to read the next time he looks into this hook.
+  - `clement-now`: stored, and sent to his phone today.
+  - `clement-urgent`: stored, and sent on his priority channel, which interrupts him. For a live problem: a script that looks malicious in a way ok=false alone does not convey, or the hook itself misbehaving.
 
 Thanks. This one call is what lets the regex in front of you stay lenient.

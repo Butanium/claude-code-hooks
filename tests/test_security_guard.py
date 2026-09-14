@@ -53,6 +53,7 @@ def run_guard(payload, env=None):
         "CLAUDE_GUARD_STUB_ARGV": str(ARGV_FILE),
         "CLAUDE_GUARD_STUB_STDOUT": "",
         "CLAUDE_GUARD_STUB_EXIT": "0",
+        "CLAUDE_GUARD_NOTES_FILE": str(NOTES),
         **(env or {}),
     }
     if ARGV_FILE.exists():
@@ -66,7 +67,12 @@ def run_guard(payload, env=None):
         env=child_env,
     )
     assert res.returncode == 0, f"guard exited {res.returncode}: {res.stderr}"
+    LAST["stderr"] = res.stderr
     return json.loads(res.stdout) if res.stdout.strip() else None
+
+
+NOTES = TMP / "notes_journal.md"
+LAST = {"stderr": ""}
 
 
 def bash(command, env=None, permission_mode="default"):
@@ -80,10 +86,12 @@ def judge_argv():
     return json.loads(ARGV_FILE.read_text(encoding="utf-8")) if ARGV_FILE.exists() else None
 
 
-def verdict_stdout(ok, reason, note=None):
+def verdict_stdout(ok, reason, note=None, route=None):
     so = {"ok": ok, "reason": reason}
     if note is not None:
         so["note"] = note
+    if route is not None:
+        so["note_route"] = route
     return json.dumps({"type": "result", "subtype": "success", "is_error": False, "structured_output": so})
 
 
@@ -196,17 +204,36 @@ for label, env in [
     check(f"judge unavailable ({label}): asks the human", hso.get("permissionDecision") == "ask", f"hso={hso}")
     check(f"judge unavailable ({label}): says so", "unavailable" in hso.get("permissionDecisionReason", ""))
 
-# judge note: forwarded over ntfy without changing the decision, and never crashing the hook
-note_env = {
-    "CLAUDE_GUARD_STUB_STDOUT": verdict_stdout(True, "fine", note="the script was truncated at the size cap"),
-    "CLAUDE_NTFY_TOPIC": "test-notes",
-    "NTFY_BASE_URL": "http://127.0.0.1:1",
-}
-out = bash(INSTALL, env=note_env)
-check("judge note on ok verdict: still allowed with unreachable ntfy", "permissionDecision" not in (out or {}).get("hookSpecificOutput", {}), f"out={out}")
-note_concern_env = {**note_env, "CLAUDE_GUARD_STUB_STDOUT": verdict_stdout(False, "odd", note="prompt did not anticipate this"), "CLAUDE_HOTLINE_NTFY_TOPIC": "test-hotline"}
-out = bash(INSTALL, env=note_concern_env)
-check("judge note on concern: still asks with unreachable ntfy", (out or {}).get("hookSpecificOutput", {}).get("permissionDecision") == "ask", f"out={out}")
+# judge notes: every note is stored in the journal with its route; on an allowed command only
+# the two "now" routes reach ntfy (regular topic vs hotline); on a concern the note rides the
+# hotline ping whatever its route. A dead port stands in for ntfy, so "sent" = attempted.
+def notes_text():
+    return NOTES.read_text(encoding="utf-8") if NOTES.exists() else ""
+
+
+ntfy_env = {"CLAUDE_NTFY_TOPIC": "test-notes", "CLAUDE_HOTLINE_NTFY_TOPIC": "test-hotline", "NTFY_BASE_URL": "http://127.0.0.1:1"}
+for route, topic in [(None, None), ("stored", None), ("clement-later", None), ("clement-now", "test-notes"), ("clement-urgent", "test-hotline")]:
+    if NOTES.exists():
+        NOTES.unlink()
+    out = bash(INSTALL, env={**ntfy_env, "CLAUDE_GUARD_STUB_STDOUT": verdict_stdout(True, "fine", note=f"note via {route}", route=route)})
+    label = route or "no route"
+    check(f"note {label}: still allowed", "permissionDecision" not in (out or {}).get("hookSpecificOutput", {}), f"out={out}")
+    text = notes_text()
+    check(f"note {label}: stored in the journal as {route or 'stored'}", f"note via {route}" in text and f"— {route or 'stored'} —" in text, f"journal={text[-400:]!r}")
+    sent = "ntfy failed" in LAST["stderr"]
+    check(f"note {label}: {'sent to ' + topic if topic else 'not sent over ntfy'}", sent == bool(topic) and (not topic or topic in LAST["stderr"]), f"stderr={LAST['stderr']!r}")
+
+if NOTES.exists():
+    NOTES.unlink()
+out = bash(INSTALL, env={**ntfy_env, "CLAUDE_GUARD_STUB_STDOUT": verdict_stdout(True, "fine", note="", route="clement-urgent")})
+check("empty note with a route: nothing stored, nothing sent", not NOTES.exists() and "ntfy failed" not in LAST["stderr"], f"stderr={LAST['stderr']!r}")
+
+if NOTES.exists():
+    NOTES.unlink()
+out = bash(INSTALL, env={**ntfy_env, "CLAUDE_GUARD_STUB_STDOUT": verdict_stdout(False, "odd", note="prompt did not anticipate this", route="stored")})
+check("note on a concern: still asks", (out or {}).get("hookSpecificOutput", {}).get("permissionDecision") == "ask", f"out={out}")
+check("note on a concern: stored as ok=false", "ok=false" in notes_text() and "prompt did not anticipate" in notes_text())
+check("note on a concern: rides the hotline ping even when routed stored", "test-hotline" in LAST["stderr"], f"stderr={LAST['stderr']!r}")
 
 # --- the launch shape ---------------------------------------------------------------
 agent = security_guard.load_agent()
@@ -228,6 +255,8 @@ agents_json = json.loads(argv[argv.index("--agents") + 1])
 check("launch: agent definition carries StructuredOutput (else the schema is not enforced)", "StructuredOutput" in agents_json["remote-script-judge"]["tools"])
 schema = json.loads(argv[argv.index("--json-schema") + 1])
 check("launch: schema requires ok + reason, note optional", set(schema["required"]) == {"ok", "reason"} and "note" in schema["properties"])
+check("launch: note_route is an enum of the four routes", schema["properties"]["note_route"]["enum"] == ["stored", "clement-later", "clement-now", "clement-urgent"])
+check("agent md: prompt names every route and the default", all(r in agent["prompt"] for r in security_guard.NOTE_ROUTES) and "Omitted means `stored`" in agent["prompt"])
 check("launch: turn and budget caps", {"--max-turns", "--max-budget-usd"} <= flags)
 check("launch: json output", argv[argv.index("--output-format") + 1] == "json")
 check("launch: message is the last argument", argv[-1] == "MSG")

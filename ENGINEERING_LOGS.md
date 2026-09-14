@@ -3,6 +3,25 @@
 Append-only. What changed, why, and the gotcha — the reasoning that would
 otherwise end up as a comment in the hook.
 
+## 2026-09-14 (later) — judge notes get a route and a journal
+
+Two of the eight replayed firings came back with a note, and both were the judge
+describing the parts of the command outside the matched pattern — accurate, and
+nothing the human needs on his phone. The prompt's "or anything else at all" had
+invited it. Clément's redesign: the note is for problems and surprises (the reason
+already describes the command), it is explicitly optional with no pressure to fill
+it, and it carries a `note_route` enum saying what to do with it: `stored` (the
+default, also when omitted), `clement-later` (read it next time the hook is looked
+at), `clement-now` (also ntfy, regular topic), `clement-urgent` (also the hotline at
+urgent priority). Every note is appended to
+`<config dir>/agents/remote-script-judge_journal.md` with its route, whichever it is —
+the file is a `*_journal.md`, so `sync_config.py` auto-commits it and it follows the
+human across machines next to the journals he already reads. On a concern (ask/deny)
+the note still rides the hotline ping regardless of route, since he is being paged
+anyway. `CLAUDE_GUARD_NOTES_FILE` overrides the path.
+
+---
+
 ## 2026-09-14 — `security_guard.py`: the remote-script pattern gets a judge
 
 The `(curl|wget).*\|\s*(ba|z|k|da)?sh\b` pattern was 6 of the guard's first 12
