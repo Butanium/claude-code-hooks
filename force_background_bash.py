@@ -319,7 +319,7 @@ def main():
         "blocks. If you expect this to take >60s, prefer run_in_background=true "
         "upfront to skip the sync wait entirely, which can allow you to work on "
         "other stuff while it's running and have stronger monitors: if this task "
-        "requires it, don't forget to monitor it properly with Monitor or /loop."
+        "requires it, arm `bgwatch` on it (the launch hook prints the exact Monitor call)."
     )
     print(
         json.dumps(
