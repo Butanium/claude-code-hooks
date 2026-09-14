@@ -3,6 +3,51 @@
 Append-only. What changed, why, and the gotcha — the reasoning that would
 otherwise end up as a comment in the hook.
 
+## 2026-09-14 (latest) — one CLI-patch detector, and it can say "I don't know"
+
+`bgwatch_hint.py` ended every hint with "Monitor is a deferred tool — `ToolSearch
+select:Monitor` first if it isn't loaded." That reads like a conditional but there
+was no branch: it is a constant f-string suffix, and the hook (PostToolUse on Bash)
+gets the tool call payload, not the session's tool roster, so it could not know. The
+conditional was delegated to whoever read it. Fine on a stock binary; on one carrying
+the patches repo's `monitor-undefer.py` it is dead text plus a nudge toward a call the
+model does not need.
+
+So the hook now detects the patch, reusing what `force_background_bash.py` already
+had for `auto-background.py` — shim-dereferencing binary locator, Bun module-graph
+parser, (realpath, size, mtime) cache — extracted to `utils/_clipatch.py`. Both hooks
+read one copy now instead of the second being a copy-paste waiting to drift.
+
+The part worth keeping: `text_patch_state` is TRI-state, PATCHED / STOCK / UNKNOWN.
+A yes/no detector cannot distinguish "the binary is unpatched" from "my anchor moved
+and I can no longer look", and reports the second as the first — which is exactly what
+happened when 2.1.270 deleted the `&&!/git/i.test(` literal the auto-background
+detector anchored on, and every patched binary read as unpatched for a month with
+nothing anywhere saying so. UNKNOWN is now a distinct answer, and
+`tests/test_clipatch.py` is what makes it loud: against the live binary every detector
+must land on PATCHED or STOCK, so a moved anchor fails a test instead of quietly
+degrading. Run it after a claude update.
+
+Second guard, cheaper and stronger: the monitor detector's two byte strings ARE the
+patch script's own `PATTERN` / `PATCHED` constants. A patch that still applies cannot
+disagree with a detector that no longer finds it — the drift the auto-background pair
+suffered is only possible while the two sides anchor on different strings.
+
+Gotchas. The detector is lazy in `force_background_bash.py` (only consulted once a
+command is already kill-class), so the common path never opens the binary: 38 ms, no
+cache file. A cold scan of the 215 MB bundle is ~245 ms, then 37 ms warm; the mtime in
+the cache key means a claude update invalidates it on its own. Renaming the cache file
+to `clipatch_<detector>_<uid>.json` orphans the old
+`force_background_bash_patch_<uid>.json`, costing exactly one extra cold scan.
+Patched text whose module still runs from bytecode is reported STOCK, not PATCHED,
+because that is what the process actually executes.
+
+Also added a `dev = ["pytest>=8"]` dependency group: `tests/test_dirty_tree_guard.py`
+is pytest-based and was failing at import, which reads as a broken test rather than a
+missing dep. It passes (13 tests).
+
+---
+
 ## 2026-09-14 (later) — judge notes get a route and a journal
 
 Two of the eight replayed firings came back with a note, and both were the judge

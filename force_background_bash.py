@@ -39,12 +39,23 @@ Patched binaries: the `auto-background.py` patch from
 https://github.com/Butanium/claude-code-patches makes EVERY command
 backgroundable at timeout, so the kill class no longer exists there and the
 deny branch would only get in the way. `binary_backgrounds_everything()`
-detects that patch in the claude binary Claude is running — the patched code
-shape must be present AND that module must run from source rather than from
-its stale bytecode (see the patch repo's `zz-bytecode-off.py`; a patched text
-whose bytecode is still enabled is inert). The check is cached per
-(path, size, mtime) in the temp dir; `FORCE_BACKGROUND_BASH_CLAUDE_BIN` points
-it at a specific binary (tests point it at a missing file to get stock rules).
+detects that patch in the claude binary Claude is running, via the shared
+detector in `utils/_clipatch.py` (locating, module-graph parsing and caching
+live there). It is consulted only once a command is already kill-class, so the
+common path never opens the binary.
+
+`auto_background_state()` is the tri-state underneath, and the third state is
+the point: UNKNOWN means `canAutoBackground:` is gone entirely — upstream moved
+the code out from under both the patch and this check — which is NOT the answer
+"the binary is unpatched", even though both leave the deny branch armed. The
+previous yes/no version could not say that, and read every patched binary as
+unpatched for a month after 2.1.270 deleted the literal it anchored on.
+`tests/test_clipatch.py` asserts the live binary never reads UNKNOWN; run it
+after a claude update.
+
+`CLAUDE_HOOKS_CLAUDE_BIN` (or the older `FORCE_BACKGROUND_BASH_CLAUDE_BIN`)
+points the check at a specific binary — tests point it at a missing file to get
+stock rules.
 
 Teammates are distinguished from subagents by agent_id format: teammate IDs
 look like ``name@team_name``, subagent IDs are bare hex. The main agent has
@@ -52,12 +63,10 @@ no agent_id at all. (In tmux/pane teammate mode agent_id is also absent —
 those fall through to main-agent rules, which is the intent.)
 """
 import json
-import os
 import re
-import shutil
-import struct
 import sys
-import tempfile
+
+from utils._clipatch import PATCHED, STOCK, UNKNOWN, inspect_cached, module_runs_from_source
 
 KILL_CLASS_RE = re.compile(
     r"<<<"  # herestring (untested; conservative)
@@ -81,129 +90,32 @@ _FLAG = b"canAutoBackground:"
 _FLAG_RE = re.compile(re.escape(_FLAG) + rb"([A-Za-z_$][\w$]*)[,}]")
 _PATCHED_TAIL = rb"=![\w$]+&&!0(?:/\*[a-z]*\*/| *),"
 _FLAG_WINDOW = 400
-_TRAILER = b"\n---- Bun! ----\n"
-_REC = 52
-# Module names are paths in Bun's embedded virtual filesystem, whose root is
-# platform-dependent — hard-coding the POSIX one made every base candidate look
-# wrong on Windows, so the graph never parsed and every patched binary read as
-# unpatched. Kept in sync with NAME_PREFIXES in the patches repo's _bungraph.py.
-_NAME_PREFIXES = (b"/$bunfs/", b"B:/~BUN/", b"B:\\~BUN\\")
+def _auto_background_state(data):
+    """PATCHED / STOCK / UNKNOWN for the auto-background patch.
 
-
-def _bun_module_bytecode_len(data, off):
-    """Length of the JSC bytecode blob for the Bun standalone module whose JS
-    text covers file offset `off` (0 = that module runs from source). None if the
-    graph can't be parsed. Mirrors `_bungraph.py` in the patches repo."""
-    t = data.rfind(_TRAILER)
-    if t == -1:
-        return None
-    mp_off, mp_len = struct.unpack_from("<II", data, t - 24)
-    if mp_len == 0 or mp_len % _REC:
-        return None
-    p = (t // 512) * 512
-    base = None
-    while p >= 0:
-        (count,) = struct.unpack_from("<Q", data, p)
-        if 0 <= (t + len(_TRAILER)) - (p + 8) - count < 65536:
-            tbl = p + 8 + mp_off
-            if tbl + mp_len <= len(data):
-                noff, nlen = struct.unpack_from("<II", data, tbl)
-                name = data[p + 8 + noff : p + 8 + noff + 8]
-                if 0 < nlen < 512 and name.startswith(_NAME_PREFIXES):
-                    base = p + 8
-                    break
-        p -= 512
-    if base is None:
-        return None
-    tbl = base + mp_off
-    for i in range(mp_len // _REC):
-        r = tbl + i * _REC
-        _n, _nl, coff, clen, _s, _sl, _b, blen = struct.unpack_from("<8I", data, r)
-        if base + coff <= off < base + coff + clen:
-            return blen
-    return None
-
-
-def _inspect_binary(path):
-    with open(path, "rb") as f:
-        data = f.read()
+    UNKNOWN means `canAutoBackground:` is gone entirely, i.e. upstream moved the
+    code out from under both the patch and this check — which is NOT the same
+    answer as "the binary is unpatched", even though both leave the deny branch
+    armed.
+    """
+    seen = False
     for m in _FLAG_RE.finditer(data):
+        seen = True
         assign = re.compile(rb"(?<![\w$])" + re.escape(m.group(1)) + _PATCHED_TAIL)
         a = assign.search(data, max(0, m.start() - _FLAG_WINDOW), m.start())
         if a:
-            return _bun_module_bytecode_len(data, a.start()) == 0
-    return False
+            return PATCHED if module_runs_from_source(data, a.start()) else STOCK
+    return STOCK if seen else UNKNOWN
 
 
-_SHIM_SUFFIXES = (".cmd", ".bat", ".ps1")
-_SHIM_EXE_RE = re.compile(r'"?([a-zA-Z]:\\[^"\r\n]*?claude\.exe)"?')
-
-
-def _claude_binary():
-    """Path of the live claude bundle, or None.
-
-    `which claude` can land on a Windows launcher shim — a one-line .cmd that
-    execs the real .exe — which carries no Bun module graph at all, so scanning
-    it makes a patched install read as unpatched. Dereference the shim, then
-    fall back to the native-installer location the way the patches repo's
-    `candidate_binaries()` does.
-    """
-    override = os.environ.get("FORCE_BACKGROUND_BASH_CLAUDE_BIN")
-    if override:
-        return override
-    which = shutil.which("claude")
-    if which:
-        if os.path.splitext(which)[1].lower() in _SHIM_SUFFIXES:
-            with open(which, encoding="utf-8", errors="replace") as f:
-                m = _SHIM_EXE_RE.search(f.read())
-            if m and os.path.isfile(m.group(1)):
-                return m.group(1)
-        else:
-            return which
-    for cand in (
-        os.path.expanduser("~/.local/bin/claude.exe"),
-        os.path.expanduser("~/.local/bin/claude"),
-    ):
-        if os.path.isfile(cand):
-            return cand
-    return None
+def auto_background_state():
+    return inspect_cached("auto_background", _auto_background_state) or UNKNOWN
 
 
 def binary_backgrounds_everything():
     """True iff the claude binary in use carries the auto-background patch and
     the patched module actually runs from source."""
-    path = _claude_binary()
-    if not path:
-        return False
-    try:
-        path = os.path.realpath(path)
-        st = os.stat(path)
-    except OSError:
-        return False
-    key = [path, st.st_size, int(st.st_mtime)]
-    # Unix /tmp is shared, so the cache name carries the uid to keep users apart.
-    # Windows has no os.getuid() and hands each user their own temp dir anyway.
-    uid = os.getuid() if hasattr(os, "getuid") else ""
-    cache = os.path.join(tempfile.gettempdir(), f"force_background_bash_patch_{uid}.json")
-    try:
-        with open(cache, encoding="utf-8") as f:
-            c = json.load(f)
-        if c.get("key") == key:
-            return bool(c.get("patched"))
-    except (OSError, ValueError):
-        pass
-    try:
-        patched = _inspect_binary(path)
-    except OSError:
-        return False
-    try:
-        tmp = cache + f".{os.getpid()}"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"key": key, "patched": patched}, f)
-        os.replace(tmp, cache)
-    except OSError:
-        pass
-    return patched
+    return auto_background_state() == PATCHED
 
 
 def heredoc_kills(command: str) -> bool:

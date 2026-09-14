@@ -21,6 +21,28 @@ import re
 import sys
 import tempfile
 
+from utils._clipatch import PATCHED, text_patch_state
+
+# --- is Monitor loaded up front, or behind ToolSearch? ------------------------
+# Monitor ships deferred, so stock the model must spend a `ToolSearch
+# select:Monitor` call before it can arm anything — worth one line of the hint.
+# The `monitor-undefer.py` patch (https://github.com/Butanium/claude-code-patches)
+# flips that flag, and then the line is dead text plus a nudge toward a call the
+# model does not need. These two byte strings are the patch's own PATTERN and
+# PATCHED constants, so a patch that still applies cannot disagree with this
+# check; `shouldDefer:!0` alone has ~46 copies in the binary, hence the
+# neighbouring property names, which are structural and survive minification.
+_MONITOR_STOCK = b"maxResultSizeChars:1e4,shouldDefer:!0,permissionCheckFailureDecision"
+_MONITOR_PATCHED = b"maxResultSizeChars:1e4,shouldDefer:!1,permissionCheckFailureDecision"
+
+
+def monitor_loaded_upfront() -> bool:
+    """True only when we positively confirmed the undefer patch is in effect.
+    UNKNOWN (anchor moved, binary unreadable) keeps the ToolSearch line, which
+    is the harmless answer: at worst it restates something already true."""
+    return text_patch_state(_MONITOR_STOCK, _MONITOR_PATCHED, "monitor_undefer") == PATCHED
+
+
 REDIRECT_RE = re.compile(r"(?<![<>&0-9])(?:&>>?|>>?)\s*(\"?'?)([^\s;&|\"']+)\1")
 LEADING_CD_RE = re.compile(r"^\s*cd\s+(\"?'?)([^\s;&|\"']+)\1\s*(?:&&|;)")
 
@@ -83,8 +105,8 @@ def main() -> None:
         f"the job's own output cadence, and the job's exit (detected because the job holds that file open — "
         f"no --pid/--pgrep needed when the job writes the watched file{alt}); then it exits itself. "
         f"Add --match RE for a progress marker, --ignore RE / --fail-also RE to tune patterns (`bgwatch --help`). "
-        f"Not needed for a job that ends in seconds: the completion notification covers it. "
-        f"Monitor is a deferred tool — `ToolSearch select:Monitor` first if it isn't loaded."
+        f"Not needed for a job that ends in seconds: the completion notification covers it."
+        + ("" if monitor_loaded_upfront() else " Monitor is a deferred tool \u2014 `ToolSearch select:Monitor` first if it isn't loaded.")
     )
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": hint}}))
 

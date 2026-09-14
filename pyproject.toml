@@ -8,3 +8,9 @@ dependencies = [
     "psutil>=5.9",
     "croniter>=2.0",
 ]
+
+[dependency-groups]
+# tests/test_dirty_tree_guard.py is pytest-based; without this it fails to import
+# rather than failing an assertion, which reads as a broken test rather than a
+# missing dep.
+dev = ["pytest>=8"]
