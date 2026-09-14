@@ -3,6 +3,41 @@
 Append-only. What changed, why, and the gotcha — the reasoning that would
 otherwise end up as a comment in the hook.
 
+## 2026-09-14 — `sync_config.py`: don't rebase when there is nothing to pull
+
+Session start failed on every launch with a conflict the human had already
+resolved. The repo shape: a local commit and an upstream commit both appended a
+line to `ideas/CLAUDE.md`, and someone reconciled them with a merge commit. That
+merge sat unpushed, so the repo was 3 ahead / 0 behind.
+
+`commits_ahead()` was nonzero, so the hook chose `git pull --rebase --autostash`.
+Two things then compound:
+
+- `pull --rebase` replays `@{u}..HEAD` even when the upstream has not moved —
+  "nothing to pull" is not a case it short-circuits.
+- plain rebase *drops* merge commits. The merge that resolved the conflict was
+  discarded and its two parents replayed linearly, so the conflict came back.
+
+The rebase aborted cleanly (that part worked), the hook exited 1, and nothing
+was pushed — which left the repo in exactly the same state for the next session.
+A self-perpetuating failure: the unpushed merge is what triggers it, and the
+failure is what prevents the push that would clear it.
+
+Now the hook fetches first and branches on real ahead/behind counts:
+
+| ahead | behind | action |
+|---|---|---|
+| any | 0 | nothing — upstream is already contained in HEAD |
+| 0 | >0 | `merge --ff-only @{u}` |
+| >0 | >0 | `rebase --rebase-merges --autostash @{u}` (index clean) |
+| >0 | >0 | `merge --ff-only @{u}` (index dirty — rebase would unstage) |
+
+`--rebase-merges` is the secondary guard: when a rebase genuinely is needed, it
+keeps merge topology instead of flattening resolutions back into conflicts.
+
+Gotcha for whoever touches this next: `git pull` looks like it decides sensibly
+on its own and it does not. Decide from the counts, then run the local operation.
+
 ## 2026-09-12 — `force_background_bash.py`'s patch detector broke silently on 2.1.270
 
 `binary_backgrounds_everything()` decides whether the CLI still has a kill class

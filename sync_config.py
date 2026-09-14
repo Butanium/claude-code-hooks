@@ -179,6 +179,18 @@ def commits_ahead() -> int | None:
     return int(result.stdout.strip()) if result.returncode == 0 else None
 
 
+def ahead_behind() -> tuple[int, int] | None:
+    """(ahead, behind) vs the upstream branch; None if no upstream."""
+    result = git("rev-list", "--left-right", "--count", "@{u}...HEAD")
+    if result.returncode != 0:
+        return None
+    fields = result.stdout.split()
+    if len(fields) != 2:
+        return None
+    behind, ahead = fields
+    return int(ahead), int(behind)
+
+
 def sync_config() -> tuple[bool, str, list[str]]:
     """Commit journals, pull, push. Returns (success, message, warnings).
 
@@ -195,22 +207,35 @@ def sync_config() -> tuple[bool, str, list[str]]:
         if journal_msg:
             parts.append(journal_msg)
 
-        # Plain ff-only pull fails whenever local commits exist (the journal
-        # commit above, or an earlier session's unpushed work) — rebase local
-        # commits on top of the remote in that case. Rebase refuses to run on
-        # a dirty index though (and --autostash would restore staged changes
-        # as unstaged): if the user has something staged, stick to ff-only —
-        # it succeeds unless the remote moved too, and that triple overlap
-        # (local commits + staged changes + remote ahead) is for a human.
-        ahead = commits_ahead()
+        # Fetch first and branch on the real ahead/behind counts, rather than
+        # letting `git pull` decide. `pull --rebase` replays local commits even
+        # when the remote hasn't moved, and plain rebase drops merge commits:
+        # a local merge that resolved a conflict gets flattened back into the
+        # conflicting commits, and the session-start hook re-hits a conflict a
+        # human already settled. Nothing to pull => don't rebase.
+        fetch = git("fetch", "--quiet", timeout=15)
+        if fetch.returncode != 0:
+            return False, "\n".join(parts + [f"git fetch failed: {fetch.stderr.strip()}"]), warnings
+
+        counts = ahead_behind()
+        ahead, behind = counts if counts else (0, 0)
         index_clean = git("diff", "--cached", "--quiet").returncode == 0
-        if ahead and index_clean:
-            pull_args = ["pull", "--rebase", "--autostash"]
+
+        # Rebase refuses to run on a dirty index (and --autostash would restore
+        # staged changes as unstaged): if the user has something staged, stick
+        # to ff-only — it succeeds unless local commits exist too, and that
+        # triple overlap (local commits + staged changes + remote ahead) is for
+        # a human. --rebase-merges keeps merge resolutions from being redone.
+        if not behind:
+            pull_args = None  # upstream already contained in HEAD
+        elif ahead and index_clean:
+            pull_args = ["rebase", "--rebase-merges", "--autostash", "@{u}"]
         else:
-            pull_args = ["pull", "--ff-only"]
-        result = git(*pull_args, timeout=15)
-        if result.returncode != 0:
-            if "--rebase" in pull_args:
+            pull_args = ["merge", "--ff-only", "@{u}"]
+
+        result = git(*pull_args, timeout=15) if pull_args else None
+        if result is not None and result.returncode != 0:
+            if "rebase" in pull_args:
                 # Never leave a session-start hook's mess behind: a conflicted
                 # rebase would strand the repo mid-rebase with marker-riddled
                 # files. Abort back to the pre-pull state and let a human (or
@@ -220,7 +245,7 @@ def sync_config() -> tuple[bool, str, list[str]]:
                 return False, "\n".join(
                     parts
                     + [
-                        "git pull --rebase conflicted (aborted — repo restored, "
+                        "git rebase onto upstream conflicted (aborted — repo restored, "
                         f"local commits kept, resolve manually): {result.stderr.strip()}"
                     ]
                 ), warnings
@@ -237,10 +262,10 @@ def sync_config() -> tuple[bool, str, list[str]]:
         parts.extend(sub_notes)
         if not sub_ok:
             return False, "\n".join(parts + sub_warnings), warnings
-        if "Already up to date" in result.stdout:
+        if result is None:
             parts.append("Already up to date")
         else:
-            parts.append(f"Synced: {result.stdout.strip()}")
+            parts.append(f"Synced: {behind} commit(s) from upstream")
 
         # Push anything ahead (journal commits, or stranded commits from a
         # previous offline session) so other machines actually converge.
