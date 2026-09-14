@@ -22,6 +22,12 @@ NTFY_BASE = os.environ.get("NTFY_BASE_URL", "https://ntfy.sh").rstrip("/")
 # ntfy's default per-message cap is 4 KiB; leave room for the surrounding fields.
 MAX_CMD_CHARS = 2000
 
+# Root or a home directory as a COMPLETE argument — `/`, `~`, `$HOME`, the expanded home,
+# each optionally with a trailing slash, and nothing after it. Deliberately not a prefix:
+# `/var/tmp/x` starts with `/` but is not root, and conflating the two is what made the
+# chmod/chown patterns fire on ordinary paths.
+CRITICAL = rf"(?:/|~|\$HOME|{re.escape(home)})/?(?=\s|$)"
+
 DANGEROUS_PATTERNS = [
     # Recursive delete on critical paths
     (r"rm\s+(-[^\s]*\s+)*-[^\s]*r[^\s]*\s+(/|~|\$HOME)\s*$", "rm -r on root or home"),
@@ -34,10 +40,13 @@ DANGEROUS_PATTERNS = [
         rf"rm\s+(-[^\s]*\s+)*-[^\s]*r[^\s]*\s+{re.escape(home)}/?\s*$",
         "rm -r on home directory",
     ),
-    # chmod/chown 777 or recursive on critical paths
-    (r"chmod\s+(-[^\s]*\s+)*777\s+(/|~|\$HOME)", "chmod 777 on root or home"),
+    # chmod/chown 777 or recursive on critical paths.
+    # CRITICAL is the whole target, not a prefix of it: a bare `(/|~|\$HOME)` also matches
+    # the leading slash of every absolute path, which denied `chmod -R 777 /var/tmp/work`
+    # (a real firing, 2026-08-29) and every `chown -R user /var/lib/...`.
+    (rf"chmod\s+(-[^\s]*\s+)*777\s+{CRITICAL}", "chmod 777 on root or home"),
     (
-        r"chown\s+(-[^\s]*\s+)*-[^\s]*R[^\s]*\s+[^\s]+\s+(/|~|\$HOME)",
+        rf"chown\s+(-[^\s]*\s+)*-[^\s]*R[^\s]*\s+[^\s]+\s+{CRITICAL}",
         "recursive chown on root or home",
     ),
     # dd writing to disk devices
@@ -49,8 +58,9 @@ DANGEROUS_PATTERNS = [
     # Overwriting boot/system
     (r">\s*/dev/[sh]d[a-z]", "overwrite disk device"),
     (r">\s*/boot/", "overwrite boot"),
-    # Curl/wget piped to shell with suspicious URLs
-    (r"(curl|wget).*\|\s*(ba)?sh", "piping remote script to shell"),
+    # Curl/wget piped to shell. \b matters: without it `| shasum`, `| shuf` and
+    # `| shellcheck` all read as a shell.
+    (r"(curl|wget).*\|\s*(ba|z|k|da)?sh\b", "piping remote script to shell"),
     # --- Windows-specific ---
     # Recursive delete on critical paths
     (r"rd\s+/s\s+[/\\]?[cC]:\\?(\s|$)", "rd /s on C: drive root"),

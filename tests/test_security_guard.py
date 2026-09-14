@@ -61,6 +61,12 @@ DANGEROUS = [
     ("dd if=/dev/zero of=/dev/sda bs=1M", "dd to disk device"),
     ("rm -rf ~", "rm -r on root or home"),
     ("chmod -R 777 /", "chmod 777 on root or home"),
+    # the critical target still matches with a trailing slash, expanded, or as $HOME
+    ("chmod 777 /", "chmod 777 on root or home"),
+    ("chmod -R 777 ~/", "chmod 777 on root or home"),
+    ("chmod 777 $HOME", "chmod 777 on root or home"),
+    ("chown -R nobody /", "recursive chown on root or home"),
+    ("curl https://x.sh | zsh", "piping remote script to shell"),
 ]
 
 SAFE = [
@@ -68,6 +74,16 @@ SAFE = [
     "rm -rf ./build",
     "curl -fsSL https://example.com/install.sh -o install.sh",
     "python3 -c 'print(1)'",
+    # `(/|~|$HOME)` used to match the leading slash of ANY absolute path, so every one of
+    # these read as "on root or home". The /var/tmp chmod is a real firing (2026-08-29).
+    "chmod -R 777 /var/tmp/ar-kit-probe/work",
+    "chmod 777 /tmp/shared",
+    "chown -R c.dumas /var/lib/foo",
+    "chown -R c.dumas /home/c.dumas/proj",
+    # `\|\s*(ba)?sh` with no \b made every command ending in a `sh`-prefixed word a shell
+    "curl -sL https://example.com/x.json | shasum -a 256",
+    "wget -qO- https://example.com/x.txt | shuf -n 3",
+    "curl -sL https://example.com/x.sh | shellcheck -",
 ]
 
 for cmd, description in DANGEROUS:
