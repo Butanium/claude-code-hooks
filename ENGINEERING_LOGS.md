@@ -3,6 +3,36 @@
 Append-only. What changed, why, and the gotcha — the reasoning that would
 otherwise end up as a comment in the hook.
 
+## 2026-09-14 (latest+1) — sync_config bumps a pushed submodule instead of nagging
+
+The ahead-submodule warning asked for two commands — `git -C <path> push && git add
+<path>` — whose safety `sync_submodules` had just finished establishing. When the
+submodule's commits are already on its remote, moving the gitlink forward onto them
+strands nothing and publishes nothing new: it is the exact opposite move to `git
+submodule update`, which is what the guard is actually protecting against. So that case
+now commits the bump itself (`bump_submodule_pointers`, explicit pathspec like
+`commit_journals` so nothing else staged rides along) and the existing push-if-ahead
+publishes it.
+
+Unpushed commits keep the warning. Bumping there would leave the superproject pointing
+at a commit no other clone can fetch, and pushing them from an unwatched session-start
+hook would publish unreviewed work — several of these submodules are public repos. That
+is the line: the hook will do the bookkeeping it can prove is safe, never the publishing.
+
+Found while testing the nested case: nested submodules never reached the new code at
+all. `recorded_sha` does `ls-tree HEAD -- <path>` in the superproject, and a nested
+path isn't in the superproject's tree (its parent's gitlink is), so `mcp/paper-search-mcp`
+and friends have always fallen out one branch earlier under "cannot read commits —
+skipped". That message reads like a broken repo; it now says the parent pins it and to
+bump it from there. The `path in direct_submodules()` guard on the bump stays anyway —
+it is what keeps the bump correct if `recorded_sha` ever learns to resolve nested paths.
+
+tests/test_sync_submodules.py gains three groups: pushed+ahead bumps (and leaves an
+unrelated staged file alone, and is idempotent on the next run), and nested is warned
+about but never bumped while its direct parent still bumps normally.
+
+---
+
 ## 2026-09-14 (latest) — one CLI-patch detector, and it can say "I don't know"
 
 `bgwatch_hint.py` ended every hint with "Monitor is a deferred tool — `ToolSearch

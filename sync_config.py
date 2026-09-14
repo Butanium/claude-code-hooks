@@ -59,6 +59,51 @@ def commit_journals() -> str | None:
     return f"journal commit: {files}"
 
 
+def direct_submodules() -> set[str]:
+    """Paths of the superproject's own submodules (not nested ones).
+
+    A nested submodule's gitlink lives in its parent submodule's index, not
+    here, so `git add` from the superproject cannot bump it.
+    """
+    res = git("submodule", "status", timeout=15)
+    if res.returncode != 0:
+        return set()
+    out = set()
+    for line in res.stdout.splitlines():
+        parsed = parse_submodule_status(line)
+        if parsed:
+            out.add(parsed[1])
+    return out
+
+
+def bump_submodule_pointers(paths: list[str]) -> str:
+    """Fast-forward the superproject's gitlinks onto the submodules' HEADs.
+
+    This is the opposite move to `git submodule update`: instead of dragging the
+    submodule back to the recorded commit, drag the recorded commit forward to
+    what the submodule already has. Nothing can be stranded by it — the commits
+    stay exactly where they are and simply become reachable from the gitlink.
+    Safe to automate only for commits that are already on a remote, which is the
+    caller's job to check.
+
+    Explicit pathspec, like `commit_journals`, so nothing else the user has
+    staged rides along.
+    """
+    add = git("add", "--", *paths)
+    if add.returncode != 0:
+        return f"submodule bump add failed: {add.stderr.strip()}"
+    commit = git(
+        "commit",
+        "-m",
+        f"submodules: bump {', '.join(paths)} ({socket.gethostname()})",
+        "--",
+        *paths,
+    )
+    if commit.returncode != 0:
+        return f"submodule bump commit failed: {commit.stderr.strip()}"
+    return f"submodule pointer bumped: {', '.join(paths)}"
+
+
 def git_in(path: Path, *args: str, timeout: int = 15) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", "-C", str(path), *args],
@@ -106,14 +151,26 @@ def sync_submodules() -> tuple[bool, list[str], list[str]]:
     there and hasn't bumped the pointer yet — that checkout strands the work where only
     the reflog can find it. Committing inside a submodule leaves you on a detached HEAD
     by default, so there isn't even a branch ref to recover from, and this runs at
-    session start where nobody is watching. So: initialize what's missing, fast-forward
-    what is merely behind, and skip everything else loudly.
+    session start where nobody is watching.
+
+    But "ahead" has two cases, and only one of them is a problem. When the submodule's
+    commits are already on its remote, the fix is not to move the submodule back — it is
+    to move the gitlink forward, which strands nothing and publishes nothing new. That
+    case is now bumped automatically rather than reported, because the report was pure
+    nagging: it asked for two commands whose safety this function had just finished
+    establishing. Unpushed commits still get the warning, since bumping would leave the
+    superproject pointing at a commit no other clone can fetch, and pushing them from a
+    session-start hook would publish unreviewed work to repos that are public.
+
+    So: initialize what's missing, fast-forward what is merely behind, bump the pointer
+    for what is ahead-and-published, and skip everything else loudly.
     """
     status = git("submodule", "status", "--recursive", timeout=30)
     if status.returncode != 0:
         return False, [], [f"git submodule status failed: {status.stderr.strip()}"]
 
-    to_update, warnings, notes = [], [], []
+    to_update, to_bump, warnings, notes = [], [], [], []
+    direct = direct_submodules()
     for line in status.stdout.splitlines():
         parsed = parse_submodule_status(line)
         if parsed is None:
@@ -132,7 +189,16 @@ def sync_submodules() -> tuple[bool, list[str], list[str]]:
         want = recorded_sha(path)
         have = git_in(sub, "rev-parse", "HEAD").stdout.strip()
         if not want or not have:
-            warnings.append(f"submodule {path}: cannot read commits — skipped")
+            # A nested submodule is pinned by its PARENT's tree, not ours, so
+            # `ls-tree HEAD -- <path>` finds nothing here. That is not the same
+            # as an unreadable repo, and saying so saves the next reader the
+            # detour of checking whether the submodule is broken.
+            why = (
+                "pinned by its parent submodule, not by this repo — bump it from there"
+                if path not in direct
+                else "cannot read commits"
+            )
+            warnings.append(f"submodule {path}: {why} — skipped")
             continue
         # the pinned commit can be unknown locally when the pointer moved on another
         # machine; fetch before concluding anything about ancestry
@@ -145,9 +211,20 @@ def sync_submodules() -> tuple[bool, list[str], list[str]]:
         behind = git_in(sub, "merge-base", "--is-ancestor", have, want).returncode == 0
         if ahead:
             n = git_in(sub, "rev-list", "--count", f"{want}..{have}").stdout.strip() or "?"
+            # Already on a remote => bumping the gitlink publishes nothing new and
+            # can strand nothing, so do it instead of nagging. Unpushed commits are
+            # a different story: the superproject would then point at a commit no
+            # other clone can fetch, and pushing them here would publish unreviewed
+            # work (several of these submodules are public repos).
+            unpushed = git_in(sub, "rev-list", "--count", "HEAD", "--not", "--remotes").stdout.strip()
+            if unpushed == "0" and path in direct:
+                to_bump.append(path)
+                continue
             warnings.append(
                 f"submodule {path}: HEAD is {n} commit(s) AHEAD of the pinned "
-                f"{want[:10]} — NOT updated (it would strand that work). "
+                f"{want[:10]}, {unpushed} of them unpushed — NOT updated (it would "
+                f"strand that work), and the pointer was not bumped either (it would "
+                f"point at a commit no other clone can fetch). "
                 f"Push them and bump the pointer: git -C {path} push && git add {path}"
             )
             continue
@@ -170,6 +247,8 @@ def sync_submodules() -> tuple[bool, list[str], list[str]]:
         if res.returncode != 0:
             return False, notes, warnings + [f"git submodule update failed: {res.stderr.strip()}"]
         notes.append(f"submodules updated: {', '.join(to_update)}")
+    if to_bump:
+        notes.append(bump_submodule_pointers(to_bump))
     return True, notes, warnings
 
 
