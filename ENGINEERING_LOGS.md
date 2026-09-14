@@ -3,6 +3,66 @@
 Append-only. What changed, why, and the gotcha — the reasoning that would
 otherwise end up as a comment in the hook.
 
+## 2026-09-14 — `security_guard.py`: the remote-script pattern gets a judge
+
+The `(curl|wget).*\|\s*(ba|z|k|da)?sh\b` pattern was 6 of the guard's first 12
+firings ever (census via `whowas grep … --denied`, plus two more the same
+afternoon), and none of the 12 was a harmful command: two were the guard probing
+itself, one was the greedy `.*` reaching a `| sha256sum`, one was the deno
+installer being run the way its docs say, and the rest were the string appearing
+as *data* — an nvm one-liner inside a heredoc, a grep argument, a judge-prompt
+string. Every one denied the call, stopped the turn and paged the human's phone.
+
+The destruction patterns (rm -rf on root/home, mkfs, dd onto a disk) are made of
+rare tokens and their false positives are confined to writing *about* them, so
+they keep the hard deny. The remote-script pattern is made of everyday tokens
+(curl, a pipe, sh) and cannot be made precise by regex without parsing shell, so
+it now gets judgment instead: on a match the hook fetches the URL to
+`$TMPDIR/claude-guard/<hash>-<ts>.sh` and runs a nested `claude -p` as the agent
+in `agents/remote-script-judge.md`, which answers two questions in order — is a
+remote script actually *executed* here (data → ok), and if so does it only do
+what it claims (WebSearch when unfamiliar). Verdict mapping, per Clément: ok →
+allow-through with the reason as `additionalContext`; concern or judge
+unavailable → `permissionDecision: "ask"` plus a hotline ping so he can look
+himself, `deny` in `bypassPermissions`/`dontAsk` where nobody answers prompts;
+no `continue: false` on this path any more. The schema has an optional `note`
+the judge can use for anything about the task or the harness; it is forwarded
+to `CLAUDE_NTFY_TOPIC` (folded into the hotline message on a concern).
+
+Launch shape, each flag verified against the CLI's own `system/init` record on
+2.1.257, not the judge's self-report:
+
+- `--restricted --strict-mcp-config --tools WebSearch --allowedTools WebSearch
+  --disable-slash-commands`: zero tools, zero MCP servers, zero slash commands
+  besides WebSearch and StructuredOutput. An empty `--tools` alone is not that —
+  it drops the built-ins and still loads every MCP server from settings (the
+  first probe had sixty-odd paper-search / transcript-reader tools available)
+  plus CLAUDE.md and hooks, at 33s and $0.16 a call.
+- Scrubbed env (`PATH`, `HOME`, config-dir vars only): no API key reaches the
+  judge, so it authenticates with the subscription login (`apiKeySource: none`).
+  `--bare` would be tighter and cheaper still, but reads *only* the API key.
+- `--agents <json> --agent remote-script-judge`: the md file's frontmatter and
+  body become the agent definition. The agent's tool list **must include
+  `StructuredOutput`** — it replaces the tool set, and without it `--json-schema`
+  is silently not enforced (free text back, `structured_output: null`).
+- `--allowedTools WebSearch` is not redundant with `--tools WebSearch`: without
+  the grant the judge's search call is refused by the permission layer. The
+  judge's own `note` field reported that on its first run, which is exactly the
+  failure class the field is for.
+
+Cost and latency per firing: ~5s / $0.02 with no search, ~10s / $0.03 with one,
+~16s when the fetched script is long. `env -u CLAUDECODE` is not needed when the
+env is rebuilt from scratch.
+
+Known gap: the reviewed bytes are the hook's fetch, not the command's. Closing
+it means rewriting the pipeline to run the saved file via `updatedInput`, which
+is fragile; left as is. Test stubs: `CLAUDE_GUARD_JUDGE_CMD` (an executable that
+stands in for `claude` and prints a `claude -p --output-format json` shaped
+document) and `CLAUDE_GUARD_SKIP_FETCH`. `tests/smoke_security_guard_judge.py`
+runs the real thing on three commands.
+
+---
+
 ## 2026-09-14 — `sync_config.py`: don't rebase when there is nothing to pull
 
 Session start failed on every launch with a conflict the human had already
