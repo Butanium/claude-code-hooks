@@ -251,11 +251,13 @@ def main():
             identity += (
                 f"\n\nThere is also a journal for the other direction: `{journal}` collects"
                 f" dated notes that {name} instances write about their own patterns — habits"
-                " worth flagging to future instances, or evidence about an existing quirk"
-                " note (it fired, it didn't, its description is off). If you notice one this"
-                " session, append an entry (create the file if it doesn't exist)."
-                f" {who} reads it from time to time and promotes what holds up into the"
-                " quirk notes injected here."
+                " worth flagging to future instances. If you notice a new one this session,"
+                " append an entry (create the file if it doesn't exist). A quirk already"
+                " described in the journal or in the notes above doesn't need another entry"
+                f" each time it fires — {who} knows it's there. Add one for a known quirk only"
+                " if its description is off, or if you think a count of how often it fires"
+                f" would be worth having. {who} reads it from time to time and promotes what"
+                " holds up into the quirk notes injected here."
             )
         print(identity)
 
