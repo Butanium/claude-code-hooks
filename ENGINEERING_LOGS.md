@@ -3,6 +3,40 @@
 Append-only. What changed, why, and the gotcha — the reasoning that would
 otherwise end up as a comment in the hook.
 
+## 2026-09-17 — statusline.py moves in, and learns the prompt cache
+
+`statusline.py` lived at `~/.claude/statusline.py` while being run with
+`uv run --project ~/.claude/hooks` — it already depended on this project's venv,
+so the split bought nothing and left the script out of the public repo. Moved in
+as-is. It is not a hook and never will be; it sits here because it shares the
+runtime and the install instructions.
+
+The move also commits a per-session tee that had been sitting uncommitted since
+2026-09-16 (a wake-session convention keeps those sessions from committing in
+`~/.claude`): the payload goes to `~/.cache/claude-status/<session_id>.json`.
+That file is the only route by which a hook can read the CLI's cost ledger,
+model id and rate-limit state — none of it is in the hook stdin payload.
+
+New segment: `prompt_cache`, added to the status-line payload in CLI 2.1.251 and
+not documented anywhere we'd looked. `warm` means the *next* request hits the
+cache (last request had cache tokens, and now − last activity < ttl), so the
+useful render is state plus `recache_tokens_if_cold` — what a cold resume costs
+— not a token count. `misses` counts only *surprise* prefix breaks: >5% and
+≥2000 tokens reprocessed with no compaction or tool-result clearing to explain
+it, which is why it's worth showing in red. 2.1.260 adds `last_miss_cause`
+naming the culprit (`tools_changed`, `system_prompt_changed`, `ttl_expired_5m`,
+`likely_server_side`); the renderer handles it already and no-ops until the CLI
+catches up.
+
+Gotcha worth keeping: a countdown in a status line is a lie by default. Renders
+are event-driven — `tokenUsage`, model, mode, `lastAssistantMessageId` — so
+between API responses the text is frozen at whatever it said last. The CLI does
+schedule one render 1 s after a warm cache's `expires_at` (and after each
+rate-limit `resets_at`), so a warm→cold *flip* is honest for free; anything
+finer-grained needs `statusLine.refreshInterval`, which has no default — unset
+arms no timer at all. Measured at 60: renders settle to a clean 60 s cadence
+while idle, and it re-arms on a settings edit without restarting the session.
+
 ## 2026-09-14 (latest+1) — sync_config bumps a pushed submodule instead of nagging
 
 The ahead-submodule warning asked for two commands — `git -C <path> push && git add

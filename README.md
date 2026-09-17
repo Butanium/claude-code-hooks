@@ -50,6 +50,22 @@ folder. Adopt à la carte.
 | `teammate_idle_nag.py` | TeammateIdle | Nags a teammate that went idle with an outstanding message from the lead and no in-flight background work (per `inflight_tracker` state). |
 | `iamok_stop_guard.py` | Stop | Catches synthetic API-error stops so the agent confirms it actually finished rather than dying silently. |
 
+### Status line
+
+`statusline.py` is not a hook — it's the `statusLine` command, wired the same
+way and sharing this project's venv. It renders
+`model · cost · context · prompt-cache · lines · rate limits · durations · project`,
+and tees the raw payload to `~/.cache/claude-status/<session_id>.json`, which is
+the only way a hook can read the CLI's own cost ledger and rate-limit state.
+
+The prompt-cache segment (`🔥 47m` warm with time left, `❄️ 110k` cold with the
+rebuild cost, red `✗N(cause)` on surprise misses) needs the `prompt_cache` field
+added in CLI 2.1.251; `last_miss_cause`, which names *why* the prefix broke, in
+2.1.260. Both degrade to nothing on older builds. Pair it with
+`"refreshInterval": 60` in the `statusLine` block so the countdown ticks while
+idle — event-driven renders only fire on API responses, though the CLI does
+schedule one extra render the moment a warm cache expires.
+
 `utils/` holds shared helpers imported by hooks (not hooks themselves).
 `deprecated/` is the graveyard: retired hooks kept with a note on *why* each
 was retired — often more useful than the code.
