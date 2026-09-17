@@ -7,9 +7,9 @@ otherwise end up as a comment in the hook.
 
 `statusline.py` lived at `~/.claude/statusline.py` while being run with
 `uv run --project ~/.claude/hooks` — it already depended on this project's venv,
-so the split bought nothing and left the script out of the public repo. Moved in
-as-is. It is not a hook and never will be; it sits here because it shares the
-runtime and the install instructions.
+so the split gained nothing and left the script out of the public repo. Moved in
+as-is. It is not a hook; it lives here because it shares the runtime and the
+install instructions.
 
 The move also commits a per-session tee that had been sitting uncommitted since
 2026-09-16 (a wake-session convention keeps those sessions from committing in
@@ -28,12 +28,12 @@ naming the culprit (`tools_changed`, `system_prompt_changed`, `ttl_expired_5m`,
 `likely_server_side`); the renderer handles it already and no-ops until the CLI
 catches up.
 
-Gotcha worth keeping: a countdown in a status line is a lie by default. Renders
-are event-driven — `tokenUsage`, model, mode, `lastAssistantMessageId` — so
-between API responses the text is frozen at whatever it said last. The CLI does
+Gotcha worth keeping: a countdown in a status line goes stale by default.
+Renders are event-driven — `tokenUsage`, model, mode, `lastAssistantMessageId`
+— so between API responses the text stays at whatever it said last. The CLI does
 schedule one render 1 s after a warm cache's `expires_at` (and after each
-rate-limit `resets_at`), so a warm→cold *flip* is honest for free; anything
-finer-grained needs `statusLine.refreshInterval`, which has no default — unset
+rate-limit `resets_at`), so a warm→cold *flip* is correct without any extra
+config; anything finer needs `statusLine.refreshInterval`, which has no default — unset
 arms no timer at all. Measured at 60: renders settle to a clean 60 s cadence
 while idle, and it re-arms on a settings edit without restarting the session.
 
