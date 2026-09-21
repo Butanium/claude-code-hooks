@@ -126,6 +126,12 @@ def main():
             rl = rate_limits.get(window)
             if rl:
                 rl_parts.append(f"{label}:{rl.get('used_percentage', 0):.0f}%")
+        try:
+            from usage_limits import scoped_parts
+
+            rl_parts += scoped_parts()
+        except Exception:
+            pass
         rl_str = f" | ⚡ {' '.join(rl_parts)}" if rl_parts else ""
 
         cache_str = fmt_cache(input_data.get("prompt_cache"), time.time())

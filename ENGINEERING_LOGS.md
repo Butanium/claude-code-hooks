@@ -3,6 +3,37 @@
 Append-only. What changed, why, and the gotcha — the reasoning that would
 otherwise end up as a comment in the hook.
 
+## 2026-09-21 — the status line learns the per-model weekly window
+
+`/usage` shows "Current week (Fable)" separately from "Current week (all
+models)", and on a Max plan those numbers diverge a lot (measured today: 9% vs
+15%). The status line only had the account-wide ones, because the payload
+builder in the CLI keeps just `five_hour`, `seven_day` and (gateway only)
+`overage` — the model-scoped rows are dropped on the way out.
+
+`usage_limits.py` fetches them from `GET /api/oauth/usage` (bearer =
+`claudeAiOauth.accessToken` from `.credentials.json`) and keeps the
+`kind: "weekly_scoped"` entries of its `limits[]` array, each carrying
+`scope.model.display_name`. The status line renders from a cache file and never
+blocks on the network: a render older than 60 s spawns a detached refresher and
+prints the previous value (63 ms total), a lock file keeps concurrent sessions
+to one fetch, and past 15 min the number renders with a `?`. Expired token →
+empty result, never a refresh attempt; the CLI owns that file.
+
+Two things found while looking, worth not re-deriving:
+
+- The live number is already in the CLI's memory, header-derived: responses
+  carry `anthropic-ratelimit-unified-7d_oi-utilization`, the window the binary
+  itself labels "Fable limit", and `wj()` parses it alongside 5h/7d. Only the
+  hook payload drops it. A same-length binary patch could add it for free, but
+  the header appears *only on requests to that model* — a Fable session would
+  see it, an Opus session asking "how much Fable have I used" would not. The
+  endpoint answers in both, so the patch stays unwritten.
+- Which models count as "that model" is a gate, not a constant:
+  `tengu_usage_overage_included_models` (today `["Fable", "Fable 5",
+  "Fable 5.1"]`). Reading `display_name` off the response instead of hardcoding
+  a label means the segment follows the gate.
+
 ## 2026-09-17 — statusline.py moves in, and learns the prompt cache
 
 `statusline.py` lived at `~/.claude/statusline.py` while being run with
