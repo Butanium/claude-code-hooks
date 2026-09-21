@@ -79,16 +79,18 @@ GIT_RE = re.compile(r"(?:^|[;&|(]|\$\(|`)\s*(?:command\s+|builtin\s+)?git\b")
 SLEEP_RE = re.compile(r"^\s*sleep\b")
 
 # --- detection of the auto-background CLI patch -------------------------------
-# Stock Bash tool site: `X=!cn&&pred(cmd),…,T=helper({…,canAutoBackground:X})`;
-# the patch turns `pred(cmd)` into `!0` (+ a same-length comment). Anchored on
-# the `canAutoBackground:` property name, which survives identifier renames —
-# the previous anchor was the `&&!/git/i.test(` literal beside it, and 2.1.270
-# deleted that test, which silently made every patched binary read as unpatched.
+# Stock Bash tool site: `X=!cn&&pred(cmd),…,T=helper({…,canAutoBackground:X})`
+# (2.1.271+: `X=!cn&&cap===void 0&&pred(cmd),` — the extra clause is the
+# caller's wall-clock cap, kept by the patch); the patch turns `pred(cmd)` into
+# `!0` (+ a same-length comment). Anchored on the `canAutoBackground:` property
+# name, which survives identifier renames — the previous anchor was the
+# `&&!/git/i.test(` literal beside it, and 2.1.270 deleted that test, which
+# silently made every patched binary read as unpatched.
 # Kept in sync with `patches/auto-background.py` in the patches repo.
 # `[\w$]` throughout: minified names may contain `$`.
 _FLAG = b"canAutoBackground:"
 _FLAG_RE = re.compile(re.escape(_FLAG) + rb"([A-Za-z_$][\w$]*)[,}]")
-_PATCHED_TAIL = rb"=![\w$]+&&!0(?:/\*[a-z]*\*/| *),"
+_PATCHED_TAIL = rb"=![\w$]+&&(?:[\w$]+===void 0&&)?!0(?:/\*[a-z]*\*/| *),"
 _FLAG_WINDOW = 400
 def _auto_background_state(data):
     """PATCHED / STOCK / UNKNOWN for the auto-background patch.
