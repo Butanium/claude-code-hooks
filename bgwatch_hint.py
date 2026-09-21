@@ -21,26 +21,65 @@ import re
 import sys
 import tempfile
 
-from utils._clipatch import PATCHED, text_patch_state
+from utils._clipatch import PATCHED, STOCK, UNKNOWN, inspect_cached, module_runs_from_source, text_patch_state
 
 # --- is Monitor loaded up front, or behind ToolSearch? ------------------------
 # Monitor ships deferred, so stock the model must spend a `ToolSearch
 # select:Monitor` call before it can arm anything — worth one line of the hint.
 # The `monitor-undefer.py` patch (https://github.com/Butanium/claude-code-patches)
 # flips that flag, and then the line is dead text plus a nudge toward a call the
-# model does not need. These two byte strings are the patch's own PATTERN and
-# PATCHED constants, so a patch that still applies cannot disagree with this
+# model does not need. These byte strings are the patch's own PATTERN and
+# PATCHED shapes, so a patch that still applies cannot disagree with this
 # check; `shouldDefer:!0` alone has ~46 copies in the binary, hence the
 # neighbouring property names, which are structural and survive minification.
-_MONITOR_STOCK = b"maxResultSizeChars:1e4,shouldDefer:!0,permissionCheckFailureDecision"
-_MONITOR_PATCHED = b"maxResultSizeChars:1e4,shouldDefer:!1,permissionCheckFailureDecision"
+# The property after the flag moved at 2.1.271, hence one pair per shape.
+_MONITOR_ANCHORS = (
+    (b"maxResultSizeChars:1e4,shouldDefer:!0,permissionCheckFailureDecision",
+     b"maxResultSizeChars:1e4,shouldDefer:!1,permissionCheckFailureDecision"),      # <= 2.1.257
+    (b'maxResultSizeChars:1e4,shouldDefer:!0,userFacingName(){return"Monitor"}',
+     b'maxResultSizeChars:1e4,shouldDefer:!1,userFacingName(){return"Monitor"}'),   # >= 2.1.271
+)
 
 
 def monitor_loaded_upfront() -> bool:
     """True only when we positively confirmed the undefer patch is in effect.
     UNKNOWN (anchor moved, binary unreadable) keeps the ToolSearch line, which
     is the harmless answer: at worst it restates something already true."""
-    return text_patch_state(_MONITOR_STOCK, _MONITOR_PATCHED, "monitor_undefer") == PATCHED
+    return any(
+        text_patch_state(stock, patched, f"monitor_undefer_{i}") == PATCHED
+        for i, (stock, patched) in enumerate(_MONITOR_ANCHORS)
+    )
+
+
+# --- does `persistent: true` still mean "no deadline"? -------------------------
+# 2.1.271 put every Monitor on a <=30-min deadline behind the GrowthBook flag
+# `tengu_breezy_crescent` and dropped `persistent` from the schema, so a call
+# that still passes it is silently capped. The `monitor-persistent.py` patch
+# rewrites the gate to `return!1&&<id>("tengu_breezy_crescent")}`. A binary
+# with no flag string at all predates the change and honours persistent as-is.
+_PERSIST_FLAG = b'"tengu_breezy_crescent"'
+_PERSIST_STOCK_RE = re.compile(rb"return [A-Za-z_$][\w$]*\(" + re.escape(_PERSIST_FLAG) + rb",!0\)\}")
+_PERSIST_PATCHED_RE = re.compile(rb"return!1&&[A-Za-z_$][\w$]*\(" + re.escape(_PERSIST_FLAG) + rb"\)\}")
+_PRE_FLAG = "pre-flag"
+
+
+def _persistent_state(data):
+    """PATCHED / STOCK / _PRE_FLAG / UNKNOWN for the monitor-persistent patch."""
+    m = _PERSIST_PATCHED_RE.search(data)
+    if m:
+        return PATCHED if module_runs_from_source(data, m.start()) else STOCK
+    if _PERSIST_STOCK_RE.search(data):
+        return STOCK
+    if _PERSIST_FLAG not in data:
+        return _PRE_FLAG
+    return UNKNOWN
+
+
+def monitor_persistent_available() -> bool:
+    """True when `persistent: true` gives a watch with no deadline: a pre-2.1.271
+    binary, or a 2.1.271+ one carrying the monitor-persistent patch. STOCK and
+    UNKNOWN both get the capped form of the hint, which is the harmless answer."""
+    return inspect_cached("monitor_persistent", _persistent_state) in (PATCHED, _PRE_FLAG)
 
 
 REDIRECT_RE = re.compile(r"(?<![<>&0-9])(?:&>>?|>>?)\s*(\"?'?)([^\s;&|\"']+)\1")
@@ -97,15 +136,21 @@ def main() -> None:
     else:
         watch = task_id  # bgwatch resolves a bare task id to its output file
         alt = ""
+    if monitor_persistent_available():
+        lifetime, cap_note = "persistent=true", ""
+    else:
+        lifetime = "timeout_ms=1800000"
+        cap_note = " This build caps every watch at 30 min and notifies you at expiry; re-arm it then if the job is still running."
     hint = (
         f"Background task {task_id} launched. If it runs longer than a couple of minutes, arm its watcher now "
         f"(one call; then keep working or end the turn — do not poll):\n"
-        f'  Monitor(command="bgwatch {watch}", persistent=true, description="{desc}")\n'
+        f'  Monitor(command="bgwatch {watch}", {lifetime}, description="{desc}")\n'
         f"bgwatch wakes you for failure lines, a heartbeat that backs off from 1 to 10 min, silence longer than "
         f"the job's own output cadence, and the job's exit (detected because the job holds that file open — "
         f"no --pid/--pgrep needed when the job writes the watched file{alt}); then it exits itself. "
         f"Add --match RE for a progress marker, --ignore RE / --fail-also RE to tune patterns (`bgwatch --help`). "
         f"Not needed for a job that ends in seconds: the completion notification covers it."
+        + cap_note
         + ("" if monitor_loaded_upfront() else " Monitor is a deferred tool \u2014 `ToolSearch select:Monitor` first if it isn't loaded.")
     )
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": hint}}))
