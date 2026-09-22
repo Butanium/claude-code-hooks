@@ -121,17 +121,23 @@ def main():
             return f"{h}h{m:02d}m"
 
         rate_limits = input_data.get("rate_limits", {})
+        try:
+            from usage_limits import scoped_parts
+
+            scoped = scoped_parts()
+        except Exception:
+            scoped = []
+        scoped_str = f" ({' '.join(scoped)})" if scoped else ""
         rl_parts = []
         for window, label in [("five_hour", "5h"), ("seven_day", "7d")]:
             rl = rate_limits.get(window)
             if rl:
                 rl_parts.append(f"{label}:{rl.get('used_percentage', 0):.0f}%")
-        try:
-            from usage_limits import scoped_parts
-
-            rl_parts += scoped_parts()
-        except Exception:
-            pass
+        if scoped_str:
+            if rl_parts and rl_parts[-1].startswith("7d:"):
+                rl_parts[-1] += scoped_str
+            else:
+                rl_parts.append(f"7d{scoped_str}")
         rl_str = f" | ⚡ {' '.join(rl_parts)}" if rl_parts else ""
 
         cache_str = fmt_cache(input_data.get("prompt_cache"), time.time())

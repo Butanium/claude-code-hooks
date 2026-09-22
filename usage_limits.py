@@ -95,7 +95,7 @@ def _spawn_refresh() -> None:
 
 
 def scoped_parts() -> list[str]:
-    """['7dFable:15%'] — one token per model-scoped weekly window."""
+    """['Fable:15%'] — one token per model-scoped weekly window."""
     try:
         cache = json.loads(CACHE.read_text())
         age = time.time() - cache["fetched_at"]
@@ -109,7 +109,7 @@ def scoped_parts() -> list[str]:
 
     mark = "?" if age > STALE_AFTER else ""
     return [
-        f"7d{e['model'].replace(' ', '')}:{e['percent']:.0f}%{mark}"
+        f"{e['model'].replace(' ', '')}:{e['percent']:.0f}%{mark}"
         for e in cache.get("scoped", [])
     ]
 
