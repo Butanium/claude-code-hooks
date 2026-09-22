@@ -29,7 +29,7 @@ ENDPOINT = "https://api.anthropic.com/api/oauth/usage"
 REFRESH_AFTER = 60  # cache older than this triggers a background refresh
 STALE_AFTER = 900  # still rendered past this, but marked with '?'
 LOCK_TIMEOUT = 60  # a refresher holding the lock this long is assumed dead
-MODEL_ICONS = {"Fable": "🦊"}
+MODEL_ICONS = {"Fable": "🦊 "}
 
 
 def _token() -> str | None:
@@ -96,7 +96,7 @@ def _spawn_refresh() -> None:
 
 
 def scoped_parts() -> list[str]:
-    """['🦊15%'] — one token per model-scoped weekly window."""
+    """['🦊 15%'] — one token per model-scoped weekly window."""
     try:
         cache = json.loads(CACHE.read_text())
         age = time.time() - cache["fetched_at"]
