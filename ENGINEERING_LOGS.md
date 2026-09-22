@@ -506,8 +506,8 @@ Bash call whose expected outcome is its list.
 `backup_conversations.py` diffed local against remote by *path*: a transcript
 was uploaded the first day it existed and never again. Transcripts are appended
 to for the life of a session, so everything after day one of a long session was
-unbacked. Measured on truthful-1: 352 transcripts had grown since upload, 1.33
-GB of them; the fable porch session was 0.6 MB on HF against 3.2 MB locally.
+unbacked. Measured on one machine: 352 transcripts had grown since upload, 1.33
+GB of them; one long-lived session was 0.6 MB on HF against 3.2 MB locally.
 The naive size compare said 464 — the other 112 differ only because the remote
 copy is redacted (tokens replaced by shorter strings), which is why a raw size
 comparison can't be the change detector.
@@ -516,8 +516,8 @@ Now: a local manifest (`debug/backup_manifest.json`, path → [size, mtime_ns] a
 upload) decides "changed". With no entry (first run, manifest lost), a file on
 the remote is current iff its *redacted* size equals the remote size; that
 bootstrap read happens once per file. A file smaller than its last upload is
-never pushed — the backup exists to outlive local truncation (the March 2026
-cleanup that deleted porch transcripts is the case in point). HF keeps old
+never pushed — the backup exists to outlive local truncation (a March 2026
+Claude Code cleanup bug deleted transcripts outright). HF keeps old
 revisions in git history anyway, but HEAD shouldn't regress.
 
 Also: `*.json`, `*.txt`, `*.md` beside the transcripts are now uploaded —
