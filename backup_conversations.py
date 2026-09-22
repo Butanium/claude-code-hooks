@@ -15,8 +15,20 @@ appear in repo names, use e.g. a keyed hash of the hostname.
 
 Runs on SessionStart (async). Sleeps 5 min so quick sessions skip the upload.
 
-Upload strategy: list remote, diff against local, push missing files in
-fixed-size batches via create_commit. Each file is redacted in-memory before
+Upload strategy: list remote (with sizes), diff against local, push files that
+are missing remotely or changed since their last upload, in fixed-size batches
+via create_commit. "Changed" is tracked in a local manifest (DEBUG_DIR/
+backup_manifest.json: path -> [size, mtime_ns] as of the last upload), because
+transcripts are appended to for as long as a session lives: a path-only diff
+uploads a session once, on the first day it exists, and never again. Without a
+manifest entry (first run, manifest lost) a file on the remote counts as
+current iff its redacted size equals the remote size. A file smaller than its
+last upload is never pushed: the backup exists to survive local truncation.
+
+Uploaded: transcripts (*.jsonl, subagents included), plus the *.json / *.txt /
+*.md that sit beside them — subagent .meta.json, tool-results/ (large tool
+outputs the transcript only references), workflow state, and per-project
+auto-memory (memory/*.md), which nothing else backs up. Each file is redacted in-memory before
 upload — known secret patterns (HF/OpenAI/Anthropic/GitHub/AWS/Google tokens)
 are replaced with `<prefix><first-4-chars>_REDACTED` so HF's server-side
 secrets scanner accepts the commit. Local files are never modified.
@@ -56,8 +68,9 @@ REDACTION_RULES = [
     ("google-api",   rb"(AIza)([0-9A-Za-z_\-]{4})[0-9A-Za-z_\-]{31}",     rb"\1\2_REDACTED"),
 ]
 _COMPILED_REDACTORS = [(name, re.compile(pat), repl) for name, pat, repl in REDACTION_RULES]
-# Matches "- <path>.jsonl (ref:" inside HF's 400 secrets-scanner response body.
-_OFFENDING_FILE_RE = re.compile(r"-\s+(\S+\.jsonl)\s+\(ref:")
+BACKUP_SUFFIXES = (".jsonl", ".json", ".txt", ".md")
+# Matches "- <path> (ref:" inside HF's 400 secrets-scanner response body.
+_OFFENDING_FILE_RE = re.compile(r"-\s+(\S+\.(?:jsonl|json|txt|md))\s+\(ref:")
 
 
 def redact_secrets(data: bytes) -> tuple[bytes, dict[str, int]]:
@@ -74,6 +87,7 @@ CLAUDE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
 PROJECTS_DIR = CLAUDE_DIR / "projects"
 DEBUG_DIR = CLAUDE_DIR / "debug"
 STAMP_FILE = DEBUG_DIR / "backup_stamp.json"
+MANIFEST_FILE = DEBUG_DIR / "backup_manifest.json"
 COLLECTION_SLUG_FILE = DEBUG_DIR / "backup_collection_slug.txt"
 LOCK_FILE = DEBUG_DIR / "backup.lock"
 
@@ -265,8 +279,61 @@ def _commit_batch(
     raise RuntimeError(f"Batch failed after {MAX_COMMIT_ITERATIONS} iterations")
 
 
-def do_backup() -> str:
-    """Diff local vs remote and push missing .jsonl transcripts in fixed-size batches.
+def load_manifest() -> dict[str, list[int]]:
+    if not MANIFEST_FILE.exists():
+        return {}
+    try:
+        return json.loads(MANIFEST_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        log("Manifest unreadable; rebuilding from remote sizes")
+        return {}
+
+
+def save_manifest(manifest: dict[str, list[int]]) -> None:
+    MANIFEST_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = MANIFEST_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(manifest), encoding="utf-8")
+    tmp.replace(MANIFEST_FILE)
+
+
+def select_uploads(
+    local: dict[str, tuple[Path, int, int]],
+    remote: dict[str, int],
+    manifest: dict[str, list[int]],
+) -> tuple[list[str], list[str]]:
+    """Return (new, changed) relpaths to upload; records verified-current files in manifest.
+
+    local maps relpath -> (path, size, mtime_ns); remote maps relpath -> size.
+    """
+    new, changed = [], []
+    for rel, (path, size, mtime) in local.items():
+        if rel not in remote:
+            new.append(rel)
+            continue
+        entry = manifest.get(rel)
+        if entry is not None:
+            if entry == [size, mtime]:
+                continue
+            if size < entry[0]:
+                log(f"{rel} shrank since its last upload ({entry[0]} -> {size} bytes); not overwriting")
+                continue
+            changed.append(rel)
+            continue
+        if size == remote[rel]:
+            manifest[rel] = [size, mtime]
+            continue
+        redacted_size = len(redact_secrets(path.read_bytes())[0])
+        if redacted_size == remote[rel]:
+            manifest[rel] = [size, mtime]
+        elif redacted_size > remote[rel]:
+            changed.append(rel)
+        else:
+            log(f"{rel} is smaller than its remote copy ({redacted_size} < {remote[rel]}); not overwriting")
+    return new, changed
+
+
+def do_backup(dry_run: bool = False) -> str:
+    """Diff local vs remote and push missing or changed files in fixed-size batches.
 
     Bails on 429 (per-hour commit cap) and stops at MAX_ATTEMPTS_PER_RUN to leave
     buffer for the next run. Stamp file is written only when every missing file
@@ -298,18 +365,34 @@ def do_backup() -> str:
     )
 
     log("Listing remote files...")
-    remote = {f for f in api.list_repo_files(repo_id=hf_repo, repo_type="dataset") if f.endswith(".jsonl")}
-    log(f"Remote has {len(remote)} jsonl files")
+    remote = {
+        e.path: e.size
+        for e in api.list_repo_tree(repo_id=hf_repo, repo_type="dataset", recursive=True)
+        if e.path.endswith(BACKUP_SUFFIXES) and getattr(e, "size", None) is not None
+    }
+    log(f"Remote has {len(remote)} files")
 
     log(f"Scanning {PROJECTS_DIR}...")
-    local_files = sorted(PROJECTS_DIR.rglob("*.jsonl"))
-    missing = [p for p in local_files if p.relative_to(PROJECTS_DIR).as_posix() not in remote]
-    log(f"Local has {len(local_files)} jsonl files; {len(missing)} missing on remote")
+    local: dict[str, tuple[Path, int, int]] = {}
+    for p in sorted(PROJECTS_DIR.rglob("*")):
+        if p.suffix in BACKUP_SUFFIXES and p.is_file():
+            st = p.stat()
+            local[p.relative_to(PROJECTS_DIR).as_posix()] = (p, st.st_size, st.st_mtime_ns)
+    manifest = load_manifest()
+    new, changed = select_uploads(local, remote, manifest)
+    log(f"Local has {len(local)} files; {len(new)} missing on remote, {len(changed)} changed since upload")
+    if dry_run:
+        mb = lambda rels: sum(local[r][1] for r in rels) / 1e6
+        return (f"Dry run: would upload {len(new)} new ({mb(new):.1f} MB) and "
+                f"{len(changed)} changed ({mb(changed):.1f} MB); manifest not written")
+    save_manifest(manifest)
+    missing = [local[rel][0] for rel in new + changed]
+    stats_at_selection = {local[rel][0]: [local[rel][1], local[rel][2]] for rel in new + changed}
 
     if not missing:
         STAMP_FILE.parent.mkdir(parents=True, exist_ok=True)
         STAMP_FILE.write_text(json.dumps({"last_backup_date": today}), encoding="utf-8")
-        return f"Up to date ({len(local_files)} files, 0 to upload)"
+        return f"Up to date ({len(local)} files, 0 to upload)"
 
     n_batches = (len(missing) + BATCH_SIZE - 1) // BATCH_SIZE
     attempts_used = 0
@@ -338,6 +421,9 @@ def do_backup() -> str:
             raise
         attempts_used += n_attempts
         files_uploaded += len(committed)
+        for p in committed:
+            manifest[p.relative_to(PROJECTS_DIR).as_posix()] = stats_at_selection[p]
+        save_manifest(manifest)
         files_skipped_by_scanner += len(batch) - len(committed)
         for k, v in redactions.items():
             redaction_grand_total[k] = redaction_grand_total.get(k, 0) + v
@@ -361,7 +447,7 @@ def do_backup() -> str:
         else " (paused, will resume)"
     )
     return (
-        f"Uploaded {files_uploaded}/{len(missing)} files, "
+        f"Uploaded {files_uploaded}/{len(missing)} files ({len(new)} new, {len(changed)} changed), "
         f"{files_skipped_by_scanner} skipped by scanner, "
         f"{attempts_used} commit attempts; redactions [{grand_redact}]{suffix}"
     )
@@ -375,7 +461,19 @@ def main():
         action="store_true",
         help="Skip the 5-minute warm-up sleep and start uploading immediately. Intended for manual flushes.",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="List what would be uploaded (implies --now --force); upload nothing.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Run even if today's backup is already stamped.",
+    )
     args = parser.parse_args()
+    if args.dry_run:
+        args.now = args.force = True
 
     if not BACKUP_ENABLED or BACKUP_DISABLED:
         print(json.dumps({}))
@@ -386,7 +484,7 @@ def main():
         log("no backup repo name (CLAUDE_CODE_BACKUP_REPO_NAME / environment.json backup_repo_name) — backup skipped")
         return
 
-    if not needs_backup():
+    if not needs_backup() and not args.force:
         print(json.dumps({}))
         return
 
@@ -402,11 +500,11 @@ def main():
     else:
         log("Waiting 5 minutes before backup...")
         time.sleep(300)
-        if not needs_backup():
+        if not needs_backup() and not args.force:
             log("Stamp file appeared during wait, skipping")
             return
     start_watchdog(MAX_BACKUP_SECONDS)
-    msg = do_backup()
+    msg = do_backup(dry_run=args.dry_run)
     log(f"Backup: {msg}")
 
 

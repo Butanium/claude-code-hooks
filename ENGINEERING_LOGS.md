@@ -500,3 +500,34 @@ decomposition in the 2.1.216 bundle) and that these eleven probes on one
 Linux box generalize. Re-probe after CLI updates — the fixtures in
 `tests/test_force_background_bash.py` are the probe list; each is a 5s-timeout
 Bash call whose expected outcome is its list.
+
+## 2026-09-22 — backups re-upload transcripts that grew
+
+`backup_conversations.py` diffed local against remote by *path*: a transcript
+was uploaded the first day it existed and never again. Transcripts are appended
+to for the life of a session, so everything after day one of a long session was
+unbacked. Measured on truthful-1: 352 transcripts had grown since upload, 1.33
+GB of them; the fable porch session was 0.6 MB on HF against 3.2 MB locally.
+The naive size compare said 464 — the other 112 differ only because the remote
+copy is redacted (tokens replaced by shorter strings), which is why a raw size
+comparison can't be the change detector.
+
+Now: a local manifest (`debug/backup_manifest.json`, path → [size, mtime_ns] at
+upload) decides "changed". With no entry (first run, manifest lost), a file on
+the remote is current iff its *redacted* size equals the remote size; that
+bootstrap read happens once per file. A file smaller than its last upload is
+never pushed — the backup exists to outlive local truncation (the March 2026
+cleanup that deleted porch transcripts is the case in point). HF keeps old
+revisions in git history anyway, but HEAD shouldn't regress.
+
+Also: `*.json`, `*.txt`, `*.md` beside the transcripts are now uploaded —
+subagent `.meta.json`, `tool-results/` (large tool outputs the JSONL only
+references; 270 MB here), workflow state, and `projects/*/memory/*.md`
+(per-project auto-memory, which `~/.claude`'s own git ignores, so nothing
+backed it up). The scanner-offender regex takes those suffixes too.
+
+New flags: `--force` (ignore today's stamp), `--dry-run` (report what would go,
+upload nothing, don't write the manifest). The catch-up run: 5183 files (4831
+new, 352 changed), 52 commits, ~4 min; xet dedup means a grown transcript only
+ships its new chunks. Still daily and SessionStart-triggered: the last hours of
+a session can be up to a day behind.
