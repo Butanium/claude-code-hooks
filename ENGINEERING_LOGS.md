@@ -531,3 +531,23 @@ upload nothing, don't write the manifest). The catch-up run: 5183 files (4831
 new, 352 changed), 52 commits, ~4 min; xet dedup means a grown transcript only
 ships its new chunks. Still daily and SessionStart-triggered: the last hours of
 a session can be up to a day behind.
+
+## 2026-09-22 — overleaf_autopull: pull on every prompt, opt-in per project
+
+New UserPromptSubmit hook for repos that a collaborator edits at the same time
+(an Overleaf git mirror). Opt-in via `CLAUDE_IS_OVERLEAF_PROJECT=true` in the
+project's `.claude/settings.local.json` `env`; the settings.json command
+short-circuits in shell when the var is unset, so other projects don't pay the
+`uv run` startup per prompt.
+
+It only does what can't lose work: fast-forward (dirty files outside the
+incoming change are fine, git refuses on overlap), or rebase local commits when
+the tree is clean, with `rebase --abort` on conflict. Everything else is
+reported (additionalContext for Claude, systemMessage for the user) and the
+repo is left as it was. No autostash on purpose: a stash that conflicts on
+re-apply leaves conflict markers in the working tree with no rebase to abort.
+It never pushes.
+
+Replaced a `while true; git pull; sleep 30` background loop, which raced with
+Claude's own git commands ("incorrect old value provided" on concurrent
+fetches) and pulled mid-edit.
