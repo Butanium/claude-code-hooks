@@ -8,51 +8,54 @@ excluded — they don't receive background-completion notifications.
 Patterns matched (anywhere a sleep is the wait primitive):
 - command starts with ``sleep `` (after stripping leading whitespace)
 - command contains ``do sleep `` (loop watchdog: ``while ...; do sleep N; done``)
+
+Heredoc bodies are ignored: a script or test fixture being written that
+mentions ``do sleep`` is not a wait (ENGINEERING_LOGS.md, 2026-09-22).
 """
 import json
 import re
 import sys
 
-data = json.load(sys.stdin)
+from no_tail_head_pipes import HEREDOC
 
-if data.get("tool_name") != "Bash":
-    sys.exit(0)
 
-tool_input = data.get("tool_input", {})
-cmd = tool_input.get("command", "")
-agent_id = data.get("agent_id", "")
-is_subagent = bool(agent_id) and "@" not in agent_id
+def is_watchdog(cmd: str) -> bool:
+    cmd = HEREDOC.sub(lambda m: m.group(0).split("\n", 1)[0], cmd)
+    return cmd.lstrip().startswith("sleep ") or re.search(r"\bdo\s+sleep\s", cmd) is not None
 
-if is_subagent:
-    sys.exit(0)
 
-if tool_input.get("run_in_background"):
-    sys.exit(0)
+def main():
+    data = json.load(sys.stdin)
+    if data.get("tool_name") != "Bash":
+        return
+    tool_input = data.get("tool_input", {})
+    cmd = tool_input.get("command", "")
+    agent_id = data.get("agent_id", "")
+    if agent_id and "@" not in agent_id:  # subagent
+        return
+    if tool_input.get("run_in_background") or not is_watchdog(cmd):
+        return
 
-stripped = cmd.lstrip()
-matches = (
-    stripped.startswith("sleep ")
-    or re.search(r"\bdo\s+sleep\s", cmd) is not None
-)
-if not matches:
-    sys.exit(0)
-
-tool_input["run_in_background"] = True
-cmd_preview = cmd[:10] + "..." if len(cmd) > 10 else cmd
-message = (
-    f"Auto-backgrounded as a sleep/watchdog: {cmd_preview}\n"
-    "Idle until the completion notification — don't poll. Watchdogs run in "
-    "background so that if the real task you're waiting on finishes first, "
-    "you can act on it immediately instead of sitting out the rest of the timer."
-)
-print(
-    json.dumps(
-        {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "updatedInput": tool_input,
-                "additionalContext": message,
-            }
-        }
+    tool_input["run_in_background"] = True
+    cmd_preview = cmd[:10] + "..." if len(cmd) > 10 else cmd
+    message = (
+        f"Auto-backgrounded as a sleep/watchdog: {cmd_preview}\n"
+        "Idle until the completion notification — don't poll. Watchdogs run in "
+        "background so that if the real task you're waiting on finishes first, "
+        "you can act on it immediately instead of sitting out the rest of the timer."
     )
-)
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "updatedInput": tool_input,
+                    "additionalContext": message,
+                }
+            }
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -3,6 +3,17 @@
 Append-only. What changed, why, and the gotcha — the reasoning that would
 otherwise end up as a comment in the hook.
 
+## 2026-09-22 — force_background_sleep.py ignores heredoc bodies
+
+The `do sleep` pattern fired on text inside heredocs: a Python heredoc whose
+test fixtures contained `until ! pgrep …; do sleep 3; done` got
+auto-backgrounded twice in one session. Heredoc bodies are now stripped before
+matching, with the `HEREDOC` regex from no_tail_head_pipes.py. Replayed over
+959 archived commands the old rule backgrounded: none changed verdict, so no
+real watchdog is lost. Quoted strings stay in scope on purpose:
+`bash -c 'while …; do sleep 5; done'` is a real wait. The logic moved into
+`is_watchdog()` so tests/test_force_background_sleep.py can cover it.
+
 ## 2026-09-22 — pkill_self_match.py: a `pkill -f` that kills its own shell
 
 Two sessions (2026-08-28, 2026-09-22) restarted a server with `pkill -f
