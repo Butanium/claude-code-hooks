@@ -3,6 +3,49 @@
 Append-only. What changed, why, and the gotcha — the reasoning that would
 otherwise end up as a comment in the hook.
 
+## 2026-09-22 — pkill_self_match.py: a `pkill -f` that kills its own shell
+
+Two sessions (2026-08-28, 2026-09-22) restarted a server with `pkill -f
+'<pattern>'; …` and lost the rest of the command: exit 143/144, empty output.
+The Bash tool runs each command as `/bin/bash -c "source <snapshot> && … &&
+eval '<command>'"` (checked via `/proc/$$/cmdline`), so the calling shell's
+argv always contains the pattern text. pkill spares itself, not its parent.
+The pattern doesn't need to appear anywhere else in the command.
+
+Rule: `pkill -f PAT` self-matches iff `re.search(PAT, command)`. That's exact,
+so the hook denies. procps-ng 4.0.4 has `-A` / `--ignore-ancestors`, verified
+live to spare the calling shell (the test re-checks this). Where pkill lacks
+it, bracketing one character works (`serv[e]` doesn't match the text
+`serv[e]`), except for a single-character pattern: `[x]` still contains an x.
+
+`pgrep -f PAT` with the same self-match has three levels:
+- deny when its pids reach a kill: `| xargs kill`, `kill $(pgrep …)`,
+  `PID=$(pgrep …); kill $PID`, `for p in $(pgrep …); do kill $p`,
+  `| while read p; do kill $p`. `PID=$(pgrep … | head -1)` counts: with the
+  target gone, the lowest pid is the calling shell.
+- note when its status, count or captured output is used: `until ! pgrep`
+  and `while kill -0 $(pgrep …)` loops never end, `if pgrep` is always true,
+  counts are off by one (two inside `$(…)`, where the subshell matches too).
+- silent for a plain listing, and for `|| true` / `|| :` (except with `-c`).
+
+**Replay.** Ran `check()` over every archived Bash command that mentions pkill
+or pgrep (702 distinct commands, full text from the transcript JSONL; the
+whowas index truncates tool inputs at ~705 chars). 212 would be denied, 177 of
+which are recorded dying with exit 143/144. Most of the remaining 35 died too,
+but a `-9`/`-INT` death is recorded as "Exit code 1" or not at all. No
+recorded death went unflagged. A subagent reviewed all flagged rows
+independently and found no false-positive denies. It found one missed deny (a
+warn-level pgrep earlier in the command returned first; deny now always wins).
+Of the 106 notes it read, 86 flagged a real bug in the command, mostly never-ending wait
+loops. The replay also removed two false positives of earlier drafts: any
+unrelated `kill 1234` in the command turned a pgrep listing into a deny, and
+heredocs writing docs that mention `pkill -f` were tokenized.
+
+Known misses: a pkill inside a heredoc fed to `bash <<EOF`, and pkill run from
+an interpreter inside the command (`subprocess.run(["pkill", …])`).
+
+Not wired into settings.json yet; ~/.claude/todo.md tracks that.
+
 ## 2026-09-21 — the status line learns the per-model weekly window
 
 `/usage` shows "Current week (Fable)" separately from "Current week (all
