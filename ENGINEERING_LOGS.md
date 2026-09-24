@@ -3,6 +3,37 @@
 Append-only. What changed, why, and the gotcha — the reasoning that would
 otherwise end up as a comment in the hook.
 
+## 2026-09-23 — agent_worktree_teammate.py: teammates in their own worktree
+
+A lead that spawned `name` + `isolation:"worktree"` got in-process subagents,
+not tmux teammates: the CLI's teammate gate excludes any call with `isolation`
+or `cwd`. Teammates already follow the lead's *current* shell directory at spawn
+time (`cd` before spawning works), but a hook can't move the lead's shell, so
+the fix is the `teammate-cwd` CLI patch (named calls may carry `cwd`, forwarded
+to the pane spawner) plus this hook (`git worktree add` under the main
+checkout's `.claude/worktrees/`, then rewrite to `cwd`).
+
+Gotchas:
+- Two PreToolUse hooks returning `updatedInput` for one call race: the CLI
+  keeps the last one it reads (`if(Ee)g=Ee`). force_background_task.py now
+  skips this class of call, and this hook sets `run_in_background` itself.
+- Whether the patch is in effect is checked on the *running* image
+  (`/proc/<pid>/exe` of the claude ancestor), not `which claude`: a lead
+  started before the patch landed runs stock code, and a rewrite there would
+  put the teammate in the lead's directory.
+- The in-process spawner ignores `cwd`; the patch makes it throw, and the hook
+  passes the call through when teammates would run in-process (`-p`,
+  `--teammate-mode in-process`, or auto outside tmux), so it doesn't leave a
+  worktree behind for a call that will fail.
+- A `-p` session has no team, so a named call there never takes the teammate
+  route at all; with `cwd` it runs as a plain subagent in that directory.
+- Worktrees are not removed automatically (stock isolation removes unchanged
+  ones when the subagent ends; a teammate has no such end).
+
+`tests/smoke_agent_worktree_teammate.sh` is the only check that matters after a
+claude update: haiku lead in a scratch tmux session, asserts the tool result,
+team config backend/cwd and the pane's real directory.
+
 ## 2026-09-22 — force_background_sleep.py ignores heredoc bodies
 
 The `do sleep` pattern fired on text inside heredocs: a Python heredoc whose

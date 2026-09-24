@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """PreToolUse hook: forces Task (subagent) calls to run in background."""
 import json
+import os
 import sys
 
 data = json.load(sys.stdin)
@@ -9,6 +10,14 @@ if data.get("tool_name") not in ("Task", "Agent"):
     sys.exit(0)
 
 tool_input = data.get("tool_input", {})
+
+# agent_worktree_teammate.py rewrites these (and sets run_in_background itself);
+# a second updatedInput for the same call would race it.
+sys.path.insert(0, os.path.dirname(__file__))
+from agent_worktree_teammate import is_candidate  # noqa: E402
+
+if is_candidate(tool_input):
+    sys.exit(0)
 
 # Already running in background - allow as-is
 if tool_input.get("run_in_background"):
