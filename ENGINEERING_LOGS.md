@@ -652,3 +652,30 @@ It never pushes.
 Replaced a `while true; git pull; sleep 30` background loop, which raced with
 Claude's own git commands ("incorrect old value provided" on concurrent
 fetches) and pulled mid-edit.
+
+## 2026-09-25 — background-policy hooks: less noise, correct subagent test (archive sweep)
+
+From a transcript-archive sweep of what obstructed instances on the box.
+
+- `force_background_task.py`: no more `additionalContext`. Since ~2.1.271 the
+  Agent tool has no `run_in_background` parameter, so the "already background"
+  early exit never triggered and every Agent call got "launch a sleep job to
+  check in", which contradicts `no_poll_background.py`. The silent
+  `updatedInput` stays for older CLIs.
+- `force_background_bash.py`: clamp >60s to 60s instead of 30s, with no notice.
+  The old clamp meant asking for 90s bought less sync time than asking for 60s,
+  and the notice fired 661 times in 141 sessions since 08-14 while 610 of those
+  commands finished inside 30s. A command that outlives the clamp still gets
+  the CLI's own "moved to the background" result.
+- Subagent detection moved to `utils/_agent_kind.py`. In-process teammates have
+  bare agent_ids like subagents (`awhowas-reviewer-33301bc6…`), so the old
+  `"@" not in agent_id` test denied them `run_in_background` (08-17, 08-28) and
+  skipped the sleep auto-background. The CLI's
+  `<session>/subagents/agent-<id>.meta.json` has `taskKind:
+  "in_process_teammate"` for them; missing/corrupt meta falls back to the old
+  rule. `bgwatch_hint.py` still has the "@" test.
+- The subagent deny no longer says subagents "do not receive" notifications:
+  they do, as mid-turn attachments; the real limit is that ending the turn
+  returns them to the parent.
+- All three now fail open on an exception (traceback to stderr, exit 1 =
+  non-blocking hook error).

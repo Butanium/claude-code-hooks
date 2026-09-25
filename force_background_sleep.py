@@ -3,7 +3,8 @@
 
 Sleeps used as watchdogs/pings should run in background so a real task
 finishing earlier doesn't strand the agent on the timer. Subagents are
-excluded — they don't receive background-completion notifications.
+excluded — ending their turn returns them to the parent, so they can't wait for
+the completion notification (`utils/_agent_kind.is_subagent`).
 
 Patterns matched (anywhere a sleep is the wait primitive):
 - command starts with ``sleep `` (after stripping leading whitespace)
@@ -17,6 +18,7 @@ import re
 import sys
 
 from no_tail_head_pipes import HEREDOC
+from utils._agent_kind import is_subagent
 
 
 def is_watchdog(cmd: str) -> bool:
@@ -30,8 +32,7 @@ def main():
         return
     tool_input = data.get("tool_input", {})
     cmd = tool_input.get("command", "")
-    agent_id = data.get("agent_id", "")
-    if agent_id and "@" not in agent_id:  # subagent
+    if is_subagent(data):
         return
     if tool_input.get("run_in_background") or not is_watchdog(cmd):
         return
@@ -58,4 +59,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        # Non-blocking error: surfaced to the user, the command still runs.
+        import traceback
+
+        traceback.print_exc()
+        sys.exit(1)

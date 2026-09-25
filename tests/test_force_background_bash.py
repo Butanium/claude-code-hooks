@@ -82,7 +82,7 @@ check("e2e: advice names the safe heredoc form", "<<'EOF'" in hso.get("permissio
 
 out = bash(BACKGROUND[2][1], 120000)
 hso = (out or {}).get("hookSpecificOutput", {})
-check("e2e: safe heredoc with long timeout is clamped, not denied", hso.get("updatedInput", {}).get("timeout") == 30000, f"out={out}")
+check("e2e: safe heredoc with long timeout is clamped, not denied", hso.get("updatedInput", {}).get("timeout") == 60000, f"out={out}")
 
 check("e2e: short timeout is left alone", bash(KILL[0][1], 5000) is None)
 
@@ -103,7 +103,7 @@ if real:
     os.environ["FORCE_BACKGROUND_BASH_CLAUDE_BIN"] = "/nonexistent/claude"
     if patched:
         check("e2e: patched binary -> kill class is clamped, not denied",
-              hso.get("updatedInput", {}).get("timeout") == 30000, f"out={hso}")
+              hso.get("updatedInput", {}).get("timeout") == 60000, f"out={hso}")
     else:
         check("e2e: stock binary -> kill class is denied", hso.get("permissionDecision") == "deny", f"out={hso}")
     print(f"     (local claude at {real}: {'auto-background patch active' if patched else 'stock'})")
