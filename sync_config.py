@@ -348,8 +348,12 @@ def sync_config() -> tuple[bool, str, list[str]]:
 
         # Push anything ahead (journal commits, or stranded commits from a
         # previous offline session) so other machines actually converge.
+        # `check`, not `on-demand`: a gitlink bump committed in a session whose
+        # submodule commits were never pushed must not reach the remote, or every
+        # other machine gets a pointer it cannot fetch. Pushing the submodule
+        # ourselves would publish unreviewed work to public repos.
         if commits_ahead():
-            push = git("push", timeout=15)
+            push = git("push", "--recurse-submodules=check", timeout=15)
             if push.returncode != 0:
                 return False, "\n".join(parts + [f"git push failed: {push.stderr.strip()}"]), warnings
             parts.append("Pushed local commits")

@@ -167,5 +167,30 @@ check("nested: the direct parent still bumped",
       run(super_, "rev-parse", "HEAD:sub") == run(sub, "rev-parse", "HEAD"),
       f"gitlink={run(super_, 'rev-parse', 'HEAD:sub')[:10]}, sub HEAD={run(sub, 'rev-parse', 'HEAD')[:10]}")
 
+# --- 8. the push never publishes a gitlink to an unpushed submodule commit -----
+# A session committed a pointer bump without pushing the submodule; the next
+# session-start sync pushed the superproject, and every other clone got a
+# gitlink it could not fetch.
+super_origin = TMP / "super-origin.git"
+run(TMP, "init", "-q", "--bare", "-b", "main", str(super_origin))
+run(super_, "reset", "-q")  # drop case 5's staged file
+run(super_, "remote", "add", "origin", str(super_origin))
+run(super_, "push", "-q", "-u", "origin", "main")
+D = commit(sub, "d.txt", "D")  # never pushed
+run(super_, "add", "sub")
+run(super_, "commit", "-q", "-m", "bump sub to an unpushed commit")
+published = run(super_origin, "rev-parse", "main")
+ok, message, _ = sync_config.sync_config()
+check("unpushed gitlink: sync reports failure", not ok, f"message={message}")
+check("unpushed gitlink: remote not updated", run(super_origin, "rev-parse", "main") == published)
+check("unpushed gitlink: message names the submodule", "sub" in message, f"message={message}")
+
+# --- 9. once the submodule is pushed, the same sync goes through --------------
+run(sub, "push", "-q", "origin", "work")
+ok, message, _ = sync_config.sync_config()
+check("after submodule push: sync succeeds", ok, f"message={message}")
+check("after submodule push: remote has the bump",
+      run(super_origin, "rev-parse", "main:sub") == D)
+
 print("ALL OK")
 subprocess.run(["rm", "-rf", str(TMP)])

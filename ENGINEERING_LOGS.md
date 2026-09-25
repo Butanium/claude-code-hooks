@@ -3,6 +3,22 @@
 Append-only. What changed, why, and the gotcha — the reasoning that would
 otherwise end up as a comment in the hook.
 
+## 2026-09-24 — sync_config.py won't push a gitlink to an unpushed submodule commit
+
+On truthful, a session committed "bump hooks and cli-patches" in `~/.claude`
+without pushing the submodules. The next session-start sync pushed the
+superproject, so every other machine got gitlinks it couldn't fetch ("not our
+ref"). And because `settings.json` in the same commit wired
+`agent_worktree_teammate.py`, which only existed in the missing commit, `uv run`
+exited 2 on every Agent call there, which blocks the call.
+
+The push now uses `--recurse-submodules=check`: git refuses if a pushed
+commit's gitlink points at a submodule commit no remote-tracking branch has,
+and the session sees "git push failed" naming the submodule. `on-demand` would
+have fixed it silently, but it publishes submodule work nobody reviewed to public
+repos, which this hook already declines to do when bumping pointers.
+Tests 8–9 in `tests/test_sync_submodules.py`. Test 8 fails on the old hook.
+
 ## 2026-09-23 — agent_worktree_teammate.py: teammates in their own worktree
 
 A lead that spawned `name` + `isolation:"worktree"` got in-process subagents,
