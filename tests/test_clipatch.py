@@ -23,7 +23,7 @@ from pathlib import Path
 HOOKS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HOOKS))
 
-from bgwatch_hint import _MONITOR_PATCHED, _MONITOR_STOCK, monitor_loaded_upfront  # noqa: E402
+from bgwatch_hint import _MONITOR_ANCHORS, monitor_loaded_upfront  # noqa: E402
 from force_background_bash import auto_background_state  # noqa: E402
 from utils._clipatch import PATCHED, STOCK, UNKNOWN, claude_binary, text_patch_state  # noqa: E402
 
@@ -48,7 +48,9 @@ def check_in(name, got, allowed):
 
 
 def monitor_state():
-    return text_patch_state(_MONITOR_STOCK, _MONITOR_PATCHED, "monitor_undefer_test")
+    """The anchor pair of the running binary's shape (one pair per CLI shape since 2.1.271)."""
+    states = [text_patch_state(stock, patched, f"monitor_undefer_test_{i}") for i, (stock, patched) in enumerate(_MONITOR_ANCHORS)]
+    return next((st for st in states if st in (PATCHED, STOCK)), states[0])
 
 
 # --- a missing binary is UNKNOWN, and never a confident "unpatched" ----------

@@ -3,6 +3,34 @@
 Append-only. What changed, why, and the gotcha — the reasoning that would
 otherwise end up as a comment in the hook.
 
+## 2026-09-25 — bgwatch_hint.py: a target the watcher can open
+
+An archive evaluation of bgwatch (574 real launch hints since 09-14) found 161 hints (28%)
+naming a file no watcher could use. 99 had an unexpanded `$VAR`: `L=…; cmd > $L/x.log` prints
+`bgwatch $L/x.log`, and a Monitor's fresh shell has no `$L`. 62 were parse errors from a `>`
+inside a heredoc body or a quoted string: `bgwatch :`, `bgwatch {`, `bgwatch str:`, a
+`cat > run.py <<EOF` script. Fable instances fixed the path by hand. Opus instances fell back
+to the task id, which stays empty when the command redirects, so the watch was blind. One
+session made about 40 manual checks and 15 timers because of it.
+
+The parser now:
+- drops heredoc bodies and quoted strings (keeping a quoted redirect target);
+- skips redirects of `cat`/`echo`/`printf`/`tee`, which write a file for the job rather than
+  its output;
+- expands `NAME=value` set earlier in the command and the environment;
+- returns the raw text when a `$` survives, so the hint tells the model to give the absolute
+  path instead of printing a broken call.
+
+Replayed on the full commands: unusable targets 161 → 4, 3 of which now carry that instruction.
+
+Two smaller changes:
+- The old "(or the harness task file: bgwatch <id>)" alternative is now the reason not to use
+  it. That alternative is what the opus instances took.
+- Subagent detection uses `utils/_agent_kind.is_subagent`, so in-process teammates get the hint.
+
+The standalone copy in the bgwatch repo (`adoption/hooks/`) carries the same parser. Its tests
+(`tests/test_bgwatch_v3.py`) exercise it.
+
 ## 2026-09-24 — sync_config.py won't push a gitlink to an unpushed submodule commit
 
 On truthful, a session committed "bump hooks and cli-patches" in `~/.claude`
