@@ -3,6 +3,29 @@
 Append-only. What changed, why, and the gotcha — the reasoning that would
 otherwise end up as a comment in the hook.
 
+## 2026-09-25 (later) — bgwatch_hint.py: full hint once per session, auto-backgrounded commands only past 2 min
+
+The hint added about 1,000 characters to every background launch: 572 launches in 60 sessions
+since 09-14, most of them short jobs. It now works as follows:
+
+- The first launch of a session gets the full explanation; later launches get one line with
+  the exact Monitor call and target.
+- A command moved to the background by the sync timeout gets no hint at launch. 68 of 76
+  such commands ended within 2 min.
+- Such a command gets its hint on the next Bash call once it has run 2 min, provided its task
+  file is still held open and no bgwatch process already names it.
+- Per-session state lives in `<tmp>/claude-<uid>/bgwatch_hint/<session>.json`. Losing it only
+  repeats the full hint.
+
+Replayed over those sessions: characters injected fell from 577k to 166k (29%). Of the 8
+auto-backgrounded commands that ran past 2 min, 5 get the deferred hint. The other 3 saw no
+Bash call before they ended; none of the 8 was watched under the old hint either.
+
+Gap: hooks only fire on tool calls, so a deferred hint can't reach an idle model. The
+completion notification still does.
+
+Details and the replay script are in the bgwatch repo's ENGINEERING_LOGS.
+
 ## 2026-09-25 — bgwatch_hint.py: a target the watcher can open
 
 An archive evaluation of bgwatch (574 real launch hints since 09-14) found 161 hints (28%)
@@ -730,3 +753,24 @@ says "To check interim output, use Read on that file path".
   text: it had been typed as a shell argument three times.
 - The escalation marker is now `completion <task-notification>`, present in
   both the old and new deny text.
+
+## 2026-09-25 — partial_chain_warn: a failed `&&` chain may have skipped a write
+
+New PostToolUseFailure(Bash) hook. When a failed command has a file- or
+remote-changing step after an `&&` (git commit/push/merge/checkout/…, sed -i,
+tee, mv/cp, gh create/comment, or a `cat > f` that is the chain's last step),
+it adds one line naming those steps and saying they may not have run.
+The archive sweep found ~14 sessions in six weeks where an instance carried on
+as if such a step had happened (stale builds, one PR comment announcing fixes
+that were never pushed).
+
+Replayed over the 546 failed Bash calls since 2026-08-14 before wiring:
+- first cut (any redirect, python heredocs): 80 firings, about a third of them
+  wrong — mostly `cat > s.py <<EOF && python3 s.py` where the script, not the
+  write, failed;
+- narrowed (no output-capture redirects, no python heredocs, no rm, content
+  writes only when last): 23 firings in 18 sessions, nearly all a commit, push,
+  merge/checkout, sed -i, mv or cp in a chain that failed.
+It can't tell which step failed, so it names candidates rather than claiming
+they were skipped. Cannot see failures a pipe hides (`git push | tail -1`
+exits 0). Replay script and firings CSV live with the sweep's notes.
