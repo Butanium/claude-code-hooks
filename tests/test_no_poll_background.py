@@ -287,4 +287,81 @@ check(
     == "force-stop",
 )
 
+
+# --- 2026-09-25: wait for the exit trailer, server launches, deny wording --------
+import os  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+
+os.environ["NO_POLL_TRAILER_WAIT_S"] = "3"
+tmpdir = Path(tempfile.mkdtemp())
+(tmpdir / "tasks").mkdir()
+REAL = tmpdir / "tasks" / f"{TASK}.output"
+
+
+def launch_real():
+    rec = agent_launch()
+    rec["message"]["content"][0]["content"] = (
+        f"Command running in background with ID: {TASK}. Output is being written to: {REAL}")
+    return rec
+
+
+REAL.write_text("step 1\nstep 2\n\n[exited with code 0]\n")
+check("finished task (trailer present) is readable before its notification",
+      decision(run([launch_real(), assistant("reading"), assistant(f"reading {REAL}")],
+                   tool_input={"file_path": str(REAL)})) == "allow")
+check("same via a Bash cat",
+      decision(run([launch_real(), assistant("reading"), assistant("cat")], tool_name="Bash",
+                   tool_input={"command": f"cat {REAL}"})) == "allow")
+
+REAL.write_text("step 1\n")
+
+
+def finish_later():
+    time.sleep(1)
+    with open(REAL, "a") as f:
+        f.write("\n[exited with code 1]\n")
+
+
+threading.Thread(target=finish_later).start()
+t0 = time.monotonic()
+d = decision(run([launch_real(), assistant("reading"), assistant(f"reading {REAL}")], tool_input={"file_path": str(REAL)}))
+check("task finishing within the wait is allowed", d == "allow", d)
+check("…and the hook returned soon after it finished", time.monotonic() - t0 < 2.9, f"{time.monotonic() - t0:.1f}s")
+
+REAL.write_text("step 1\n")
+launch = launch_real()
+launch["timestamp"] = "2026-01-01T00:00:00.000Z"
+out = run([launch, assistant("reading"), assistant(f"reading {REAL}")], tool_input={"file_path": str(REAL)})
+reason = (out or {}).get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
+check("still-running task past the wait is denied", decision(out) == "deny", str(out))
+check("deny states the task's age", "s ago" in reason, reason)
+check("deny says where the bypass tag goes", "not as a command argument" in reason, reason)
+check("deny text still carries the escalation marker", "completion <task-notification>" in reason)
+
+link = tmpdir / "tasks" / "a1234567890abcdef.output"
+link.symlink_to(REAL)
+t0 = time.monotonic()
+agent_out = agent_launch(task="a1234567890abcdef")
+d = decision(run([agent_out, assistant("reading"), assistant(f"reading {link}")], tool_input={"file_path": str(link)}))
+check("agent output (symlink) is not waited on", time.monotonic() - t0 < 1.5 and d == "deny", f"{d} {time.monotonic() - t0:.1f}s")
+
+
+def server_launch(command):
+    call = {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": command, "run_in_background": True}}]}}
+    return [call, launch_real()]
+
+
+for label, cmd in [("uvicorn", "uv run uvicorn app:api --port 8899"),
+                   ("trailing &", "python3 -m http.server 8732 &"),
+                   ("restart script", "scripts/dev_server.sh restart")]:
+    out = run(server_launch(cmd) + [assistant("reading"), assistant(f"reading {REAL}")], tool_input={"file_path": str(REAL)})
+    check(f"server launch ({label}) is allowed with a note",
+          out is not None and "permissionDecision" not in out["hookSpecificOutput"]
+          and "server" in out["hookSpecificOutput"].get("additionalContext", ""), str(out))
+out = run(server_launch("uv run pytest -q 2>&1 && echo done") + [assistant("reading"), assistant(f"reading {REAL}")],
+          tool_input={"file_path": str(REAL)})
+check("non-server launch (&&, 2>&1) still denied", decision(out) == "deny", str(out))
+
 print("\nall good")

@@ -20,6 +20,15 @@ always allows: the harness backgrounds such a command when it outlives its sync
 timeout, and an interactive one then sits on a prompt it can no longer be fed,
 so the completion notification this guard promises may never arrive.
 
+Before denying (2026-09-25): a server-style launch (`&`, nohup/setsid, uvicorn,
+http.server, `restart`, …) is allowed with a note, since a child holding the
+output pipe can keep the notification from ever coming; otherwise the hook
+waits up to NO_POLL_TRAILER_WAIT_S (15s) for the `[exited with code N]` /
+`[killed]` line the CLI appends to the output file, and allows as soon as it
+appears. In the 2026-08/09 archive, 65 of 155 denied reads targeted tasks that
+finished within 10s, and the CLI's own launch text says "To check interim
+output, use Read on that file path".
+
 Why both arms: notifications flush at tool_use boundaries, not only after end_turn, so
 an end_turn-only check denied legitimate post-notification reads by a streaking agent
 (found by dogfooding, 2026-06-23). Arm (a) fixes that. Arm (b) keeps the original
@@ -47,8 +56,12 @@ still-partial file (e.g. debugging *why* a background job is stuck).
 """
 import json
 import json as _json
+import os
 import re
 import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
 
 # Background task output files: /tmp/.../<session>/tasks/<taskId>.output
 # Non-anchored: matched against a Read file_path AND inside a Bash command string.
@@ -65,6 +78,76 @@ BASH_READ_CMD_RE = re.compile(
 
 BYPASS_TAG = "[NOT-IN-A-DOOM-READ-LOOP]"
 
+# The CLI appends this line to a background command's output file when it ends.
+# Most denied reads (65 of 155 in the 2026-08/09 archive) targeted tasks that
+# finished within 10s, so before denying, give the task a moment to finish.
+TRAILER_RE = re.compile(rb"(?:^|\n)\[(?:exited with code -?\d+|killed)\]\n?$")
+TRAILER_WAIT_S = float(os.environ.get("NO_POLL_TRAILER_WAIT_S", "15"))
+
+# Launches whose completion notification may never come: the command leaves a
+# child holding the output pipe (a server, a daemon, `cmd &`).
+SERVER_LAUNCH_RE = re.compile(
+    r"(?:^|[\s;(|&])(?:nohup|setsid|uvicorn|gunicorn|streamlit|jupyter|vite)\b"
+    r"|http\.server|\bnpm run (?:dev|serve|start)\b|\b(?:serve|server|restart)\b"
+    r"|(?<![&>|])&(?![&>])\s*(?:$|\n|;|\))"
+)
+
+
+def _output_path(tool_name: str, tool_input: dict, task_id: str):
+    if tool_name == "Read":
+        return tool_input.get("file_path")
+    m = re.search(r"(/[^\s'\"]*/tasks/" + re.escape(task_id) + r"\.output)", tool_input.get("command") or "")
+    return m.group(1) if m else None
+
+
+def _finishes_within(path, wait_s: float) -> bool:
+    """True once the CLI's exit trailer is in the task's output file, polling up to
+    wait_s. Agent/Monitor outputs (symlinks to transcripts) never get one: no wait."""
+    if not path:
+        return False
+    p = Path(path)
+    if p.is_symlink() or not p.is_file():
+        return False
+    deadline = time.monotonic() + wait_s
+    while True:
+        try:
+            with open(p, "rb") as f:
+                f.seek(0, 2)
+                f.seek(max(0, f.tell() - 256))
+                tail = f.read()
+        except OSError:
+            return False
+        if TRAILER_RE.search(tail):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.25)
+
+
+def _launch_command(records, launch_i: int) -> str:
+    """The Bash command whose tool_result is records[launch_i], or ""."""
+    msg = records[launch_i].get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
+    ids = {b.get("tool_use_id") for b in content if isinstance(b, dict)} if isinstance(content, list) else set()
+    ids.discard(None)
+    for rec in reversed(records[:launch_i]):
+        m = rec.get("message")
+        blocks = m.get("content") if isinstance(m, dict) else None
+        if not isinstance(blocks, list):
+            continue
+        for b in blocks:
+            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id") in ids:
+                return (b.get("input") or {}).get("command") or ""
+    return ""
+
+
+def _age(rec: dict) -> str:
+    try:
+        ts = datetime.fromisoformat(rec["timestamp"].replace("Z", "+00:00"))
+        return f"{int((datetime.now(timezone.utc) - ts).total_seconds())}s ago"
+    except (KeyError, ValueError, AttributeError, TypeError):
+        return "earlier this turn"
+
 
 def _prior_deny_for_task(records, task_id):
     """True if an earlier record already carried a no_poll deny for THIS task.
@@ -73,7 +156,7 @@ def _prior_deny_for_task(records, task_id):
     The ONLY thing that resets the escalation is a real end_turn (handled by
     arm-(b) upstream); ScheduleWakeup, sleep;echo, and re-reads in between are
     all failed yields and do NOT reset it."""
-    deny_marker = "hasn't sent its completion <task-notification>"
+    deny_marker = "completion <task-notification>"  # in the deny text before and after 2026-09-25
     for rec in records[:-1]:  # exclude the current read tool_use (last record)
         if _is_assistant(rec):
             continue
@@ -206,6 +289,23 @@ def main() -> None:
     if any(_stop_reason(rec) == "end_turn" for rec in records[launch_i + 1:]):
         return
 
+    # A server-style launch may never notify (a child keeps the output pipe open), so
+    # "you'll be woken when it completes" would be false: allow, and say so.
+    if SERVER_LAUNCH_RE.search(_launch_command(records, launch_i)):
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "additionalContext": (
+                f"no_poll_background: task {task_id} looks like a server/daemon launch, so its "
+                "completion notification may never arrive; read allowed. To wait for it to be "
+                "ready, watch its log for a ready line (bgwatch <log> --match RE) instead of "
+                "re-reading."),
+        }}))
+        return
+
+    # Most tasks denied here were seconds from done: wait briefly for the exit trailer.
+    if _finishes_within(_output_path(tool_name, tool_input, task_id), TRAILER_WAIT_S):
+        return
+
     # ESCALATION (V2): re-poll without ever yielding => force-stop the whole turn.
     if _prior_deny_for_task(records, task_id):
         print(json.dumps({
@@ -227,14 +327,13 @@ def main() -> None:
         return
 
     reason = (
-        f"Task {task_id} hasn't sent its completion <task-notification> yet AND you "
-        f"haven't yielded the turn since launching it — so it's still running, its "
-        f"output file is partial, and you're in a tight read loop. Reading it now shows "
-        f"nothing useful. End the turn (ending=finishing your turn and NOT doing any tool calls) or do unrelated work; "
-        f"you'll be woken when it completes (a backup watchdog is fine). If you REALLY "
-        f"need to peek at the partial file now (you really should just idle and wait for "
-        f"the notification instead of cluttering your context), include {BYPASS_TAG} in "
-        f"your message."
+        f"Task {task_id} (launched {_age(records[launch_i])}) is still running: no "
+        f"completion <task-notification>, and no exit line in its output file after "
+        f"waiting {TRAILER_WAIT_S:g}s. You haven't ended your turn since launching it, so "
+        f"this read would show a partial file. End the turn (no text, no tool call) or do "
+        f"unrelated work; the notification will wake you when it completes. To "
+        f"deliberately inspect the partial output (e.g. debugging why it's stuck), write "
+        f"{BYPASS_TAG} in your message text — not as a command argument."
     )
     print(json.dumps({
         "hookSpecificOutput": {

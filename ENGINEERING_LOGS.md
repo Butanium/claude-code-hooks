@@ -679,3 +679,26 @@ From a transcript-archive sweep of what obstructed instances on the box.
   returns them to the parent.
 - All three now fail open on an exception (traceback to stderr, exit 1 =
   non-blocking hook error).
+
+## 2026-09-25 — no_poll_background: wait for the exit line, let servers through
+
+The archive had 155 no-poll denials in 75 sessions (08-24 → 09-24). Checked
+against when each task's completion was queued: 65 of those tasks finished
+within 10s of the denied read, 101 within 30s, 50 were genuinely still running,
+4 never notified (server launches whose child held the output pipe; one
+notification came 2.4h late, after the user asked whether the script was
+stuck). Median denied read: 8s after launch. The CLI's own launch message
+says "To check interim output, use Read on that file path".
+
+- Before denying (and before the force-stop escalation), poll the output file
+  up to `NO_POLL_TRAILER_WAIT_S` (15s) for the `[exited with code N]` /
+  `[killed]` trailer the CLI appends; allow as soon as it appears. Symlinked
+  outputs (agent transcripts) aren't waited on; a missing file isn't either.
+- Server-style launches (nohup/setsid/uvicorn/http.server/`restart`/a bare
+  `&`, …; found by resolving the launch tool_result's tool_use id back to its
+  Bash command) are allowed with a one-line note instead of the false promise
+  "you'll be woken when it completes".
+- The deny states the task's age and says the bypass tag goes in the message
+  text: it had been typed as a shell argument three times.
+- The escalation marker is now `completion <task-notification>`, present in
+  both the old and new deny text.
