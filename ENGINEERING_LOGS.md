@@ -809,3 +809,23 @@ exits 0). Replay script and firings CSV live with the sweep's notes.
   `;` step. The exit status belongs to the last `;`/newline list, so only
   write steps in that list are named now (newlines inside heredocs don't split
   lists). Archive replay: 14 firings in 557 failed calls, 10 sessions.
+
+## 2026-09-25 (evening) — watchdog sleeps vs the clamp; stage_mine_caller; midturn_messages (unwired)
+
+- `force_background_bash.py` now leaves `sleep` watchdogs to
+  `force_background_sleep.py`. Both PreToolUse hooks see the original input and
+  the CLI keeps one `updatedInput`: for `sleep 90; cat …` with `timeout:120000`
+  the clamp's `{timeout:60000}` replaced the sleep hook's
+  `{run_in_background:true}`, so the command blocked 60 s in the foreground
+  under an "Auto-backgrounded" note (8 of 19 teammate sleeps in one trace,
+  e.g. 31075c87:380→390). The sleep hook's note is now one line.
+- `stage_mine_caller.py` (PreToolUse Bash): see README. stage-mine refuses
+  when there's no record and a subagent of the session is active.
+- `midturn_messages.py` + `utils/_team_identity.py`: side channel for team
+  messages (sender PostToolUse(SendMessage) appends to
+  `teams/<team>/midturn/<recipient>.jsonl`; recipient PostToolUse injects
+  unseen entries). Not wired yet: the live two-teammate check is pending.
+  Probed: idle deliveries of team messages never pass UserPromptSubmit
+  (project PostToolUse hooks ran in the pane teammate, UserPromptSubmit
+  didn't), so the repeat at idle can't be blocked; the injected text says the
+  message will be shown again.

@@ -41,10 +41,8 @@ def main():
     tool_input["run_in_background"] = True
     cmd_preview = cmd[:10] + "..." if len(cmd) > 10 else cmd
     message = (
-        f"Auto-backgrounded as a sleep/watchdog: {cmd_preview}\n"
-        "Idle until the completion notification — don't poll. Watchdogs run in "
-        "background so that if the real task you're waiting on finishes first, "
-        "you can act on it immediately instead of sitting out the rest of the timer."
+        f"`{cmd_preview}` backgrounded for you (a sleep blocks the turn); pass run_in_background "
+        "yourself next time, and end the turn: the completion notification wakes you."
     )
     print(
         json.dumps(

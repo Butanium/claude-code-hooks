@@ -71,6 +71,7 @@ import json
 import re
 import sys
 
+from force_background_sleep import is_watchdog
 from utils._agent_kind import is_in_process_teammate
 from utils._clipatch import PATCHED, STOCK, UNKNOWN, inspect_cached, module_runs_from_source
 
@@ -192,6 +193,13 @@ def main():
 
     # --- Main agent / teammate: already background, leave alone ---
     if tool_input.get("run_in_background"):
+        sys.exit(0)
+
+    # --- A sleep watchdog: force_background_sleep.py backgrounds it. Both hooks see
+    # the original input and the CLI keeps one updatedInput, so a clamp emitted here
+    # replaced the sleep hook's run_in_background: `sleep 90; cat …` then blocked 60s
+    # in the foreground under an "Auto-backgrounded" note (2026-09-25, 8 of 19 cases).
+    if is_watchdog(cmd):
         sys.exit(0)
 
     # --- Main agent / teammate: sync timeout policy for > 60s requests ---
