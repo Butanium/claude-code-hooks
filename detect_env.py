@@ -18,6 +18,7 @@ TEMPLATE_FILE = CLAUDE_DIR / "CLAUDE.template.md"
 OUTPUT_FILE = CLAUDE_DIR / "CLAUDE.md"
 ENV_JSON_OUTPUT = CLAUDE_DIR / "environment.json"
 MODEL_QUIRKS = CLAUDE_DIR / "model-quirks"
+MODEL_NOTES = MODEL_QUIRKS / "notes"
 
 
 def check_rule(rule: dict) -> bool:
@@ -139,6 +140,72 @@ def load_model_quirks(model: str) -> str | None:
     return None
 
 
+_MODEL_ID_RE = re.compile(r"^claude-([a-z]+)-(\d+(?:-\d{1,2}(?!\d))*)")
+_FILTER_RE = re.compile(r"^([a-z]+|\*)\s*(?:(>=|==)\s*(\d+(?:[.-]\d+)*))?$")
+
+
+def parse_model_id(key: str) -> tuple[str, tuple[int, ...]] | None:
+    """`claude-opus-5-5` -> ("opus", (5, 5)); None for ids not shaped claude-<family>-<version>."""
+    m = _MODEL_ID_RE.match(key)
+    if not m:
+        return None
+    return m.group(1), tuple(int(p) for p in m.group(2).split("-"))
+
+
+def model_matches(key: str, filters: list[str]) -> bool:
+    """True if the model key satisfies any filter.
+
+    Filters: `opus>=5` (5, 5.5, 6… all match), `fable==5` (the 5.x line; `==5.1` for one
+    version), `sonnet` (any version), `*` (every model, including unparseable ids).
+    """
+    parsed = parse_model_id(key)
+    for f in filters:
+        m = _FILTER_RE.match(f.strip().lower())
+        if not m:
+            continue
+        family, op, ver = m.groups()
+        if family == "*":
+            return True
+        if parsed is None or parsed[0] != family:
+            continue
+        if op is None:
+            return True
+        want = tuple(int(p) for p in re.split(r"[.-]", ver))
+        have = parsed[1]
+        if (op == ">=" and have >= want) or (op == "==" and have[: len(want)] == want):
+            return True
+    return False
+
+
+def load_model_notes(model: str) -> list[str]:
+    """Notes from model-quirks/notes/*.md whose `models:` frontmatter matches this model.
+
+    Unlike quirk files (one model version, framed as habits), notes are facts about the
+    setup and can target a range: `models: opus>=5, fable>=5`. No frontmatter = every model.
+    """
+    if not MODEL_NOTES.is_dir():
+        return []
+    key = model_key(model)
+    notes = []
+    for f in sorted(MODEL_NOTES.glob("*.md")):
+        if f.name.lower() == "readme.md":
+            continue
+        text = f.read_text(encoding="utf-8")
+        filters = ["*"]
+        if text.startswith("---\n"):
+            head, sep, body = text[4:].partition("\n---\n")
+            if sep:
+                text = body
+                for line in head.splitlines():
+                    k, _, v = line.partition(":")
+                    if k.strip() == "models":
+                        filters = [x for x in v.split(",") if x.strip()]
+        text = strip_html_comments(text).strip()
+        if text and model_matches(key, filters):
+            notes.append(text)
+    return notes
+
+
 # Pre-rename names, still honoured by security_guard.py (LEGACY_HOTLINE_ENV) and
 # still the names CLAUDE.template.md tells agents to use. A box that exported
 # those is configured, not missing — warning about it was a false positive, and
@@ -245,6 +312,12 @@ def main():
                 " so you can't perfectly control them, and that's fine, no need to stress about it."
                 " Sometimes even if you know you should not do X, you'll do it, but no worries, I'm a trained"
                 f" Cyborg and I'm good at catching them so that you can course correct.\n\n{quirks}"
+            )
+        notes = load_model_notes(model)
+        if notes:
+            identity += (
+                f"\n\nNot quirks, but notes about this setup that apply to {name}:\n\n"
+                + "\n\n".join(notes)
             )
         if MODEL_QUIRKS.is_dir():
             journal = MODEL_QUIRKS / f"{name}_journal.md"
