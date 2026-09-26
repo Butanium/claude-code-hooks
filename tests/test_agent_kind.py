@@ -69,15 +69,22 @@ def run_bash_hook(p):
     return json.loads(res.stdout) if res.stdout.strip() else None
 
 
-out = run_bash_hook(payload("a56320ef901c39201", run_in_background=True))
+# 2.1.280: subagents are re-invoked by their own task notifications; idle in-process
+# teammates are not (their notifications wait in the lead's queue).
+check("e2e: subagent run_in_background allowed",
+      run_bash_hook(payload("a56320ef901c39201", run_in_background=True)) is None)
+out = run_bash_hook(payload("awhowas-reviewer-33301bc6b51924bf", run_in_background=True))
 reason = (out or {}).get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
-check("e2e: subagent run_in_background denied", out and out["hookSpecificOutput"]["permissionDecision"] == "deny")
-check("e2e: deny no longer claims subagents lack notifications", "do not receive" not in reason, reason)
-check("e2e: in-process teammate run_in_background allowed",
-      run_bash_hook(payload("awhowas-reviewer-33301bc6b51924bf", run_in_background=True)) is None)
-check("e2e: subagent with BACKGROUND_NEEDED allowed",
-      run_bash_hook(payload("a56320ef901c39201", run_in_background=True,
+check("e2e: in-process teammate run_in_background denied", out and out["hookSpecificOutput"]["permissionDecision"] == "deny")
+check("e2e: deny names the in-process limit", "in-process teammate" in reason, reason)
+check("e2e: in-process teammate with BACKGROUND_NEEDED allowed",
+      run_bash_hook(payload("awhowas-reviewer-33301bc6b51924bf", run_in_background=True,
                             command="echo BACKGROUND_NEEDED && uv run server")) is None)
+check("e2e: in-process teammate long sync timeout untouched",
+      run_bash_hook(payload("awhowas-reviewer-33301bc6b51924bf", timeout=600000)) is None)
+out = run_bash_hook(payload("a56320ef901c39201", timeout=120000))
+check("e2e: subagent long sync timeout clamped like the main agent",
+      (out or {}).get("hookSpecificOutput", {}).get("updatedInput", {}).get("timeout") == 60000, f"out={out}")
 out = run_bash_hook(payload(timeout=120000))
 hso = (out or {}).get("hookSpecificOutput", {})
 check("e2e: main agent 120s sync -> clamped to 60s", hso.get("updatedInput", {}).get("timeout") == 60000, f"out={out}")

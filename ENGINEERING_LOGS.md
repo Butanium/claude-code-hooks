@@ -774,3 +774,25 @@ Replayed over the 546 failed Bash calls since 2026-08-14 before wiring:
 It can't tell which step failed, so it names candidates rather than claiming
 they were skipped. Cannot see failures a pipe hides (`git push | tail -1`
 exits 0). Replay script and firings CSV live with the sweep's notes.
+
+## 2026-09-25 — subagents may background after all; session_env.py
+
+- **Reversal of this morning's subagent change.** A delegation audit probed
+  2.1.280 today: a subagent (and a fork) that ends its turn with a background
+  task running is re-invoked by that task's notification (twice, the second
+  after 4 min idle); an idle *in-process teammate* is not — its task
+  notifications and Monitor events wait in the lead's queue until someone
+  messages it. So `force_background_bash.py` now blocks `run_in_background`
+  for in-process teammates only (`utils/_agent_kind.is_in_process_teammate`),
+  and subagents/forks get the main-agent rules; `force_background_sleep.py`
+  likewise auto-backgrounds for subagents and skips in-process teammates.
+- `force_background_sleep.py` ignores quoted strings and `$(...)` too
+  (`strip_inert`): an `echo "… do sleep 20 …" >> log` was auto-backgrounded.
+- New SessionStart hook `session_env.py`, writing to `$CLAUDE_ENV_FILE`:
+  `unset -f grep find`, and `. "$CLAUDE_SECRETS_FILE"` when set. Probed with
+  fresh `claude -p` sessions: the unset holds on every Bash call (GNU grep
+  3.12, `{0,30}` regexes and `find -newermt "-2 minutes"` work);
+  `--allowedTools Grep,Glob` also removes the functions but changes the tool
+  set, so the env-file route was chosen. `tests/smoke_session_env.sh` starts a
+  tmux server carrying a stale fake key and checks that the session's Bash sees
+  the file's value. Hooks themselves still get the CLI process's inherited env.

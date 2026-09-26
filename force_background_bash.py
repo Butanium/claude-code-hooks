@@ -13,11 +13,14 @@
     timeout is a hard SIGTERM kill (exit 143), so clamping would kill work
     the model sized its timeout to protect (this bit us: a 240s request
     clamped to 30s killed a pipeline mid-run with partial output).
-- Subagents: block `run_in_background=true` unless command contains
-  BACKGROUND_NEEDED escape hatch (e.g. starting a server). They DO receive
-  completion notifications (as mid-turn attachments), but ending their turn
-  returns them to the parent, so they can't wait for one — they'd poll.
-  High sync timeouts remain allowed.
+- In-process teammates: block `run_in_background=true` unless the command
+  contains the BACKGROUND_NEEDED escape hatch (e.g. starting a server). An idle
+  in-process teammate is not woken by its own task notifications or Monitor
+  events; they wait until someone messages it. High sync timeouts stay allowed.
+- Subagents and forks get the main-agent rules. Until 2026-09-25 they were the
+  ones blocked, on the premise that they can't wait for a notification; on
+  2.1.280 a subagent that ends its turn with a task running is re-invoked by
+  that task's notification (delegation audit, 2026-09-25).
 
 Auto-backgroundability (CLI v2.1.216, re-probed on v2.1.250; undocumented,
 details in https://github.com/anthropics/claude-code/issues/79879): the CLI's
@@ -60,15 +63,15 @@ after a claude update.
 points the check at a specific binary — tests point it at a missing file to get
 stock rules.
 
-Subagent vs teammate vs main agent: `utils/_agent_kind.is_subagent` (tmux
-teammates and the main agent carry no agent_id; in-process teammates carry a
-bare one, told apart by the CLI's subagent .meta.json).
+Agent kinds: `utils/_agent_kind` (tmux teammates and the main agent carry no
+agent_id; subagents and in-process teammates carry a bare one, told apart by the
+CLI's subagent .meta.json).
 """
 import json
 import re
 import sys
 
-from utils._agent_kind import is_subagent
+from utils._agent_kind import is_in_process_teammate
 from utils._clipatch import PATCHED, STOCK, UNKNOWN, inspect_cached, module_runs_from_source
 
 CLAMP_MS = 60000
@@ -154,10 +157,10 @@ def main():
 
     tool_input = data.get("tool_input", {})
     cmd = tool_input.get("command", "")
-    subagent = is_subagent(data)
+    in_process = is_in_process_teammate(data)
 
-    # --- Subagent: block run_in_background unless escape hatch ---
-    if subagent and tool_input.get("run_in_background"):
+    # --- In-process teammate: block run_in_background unless escape hatch ---
+    if in_process and tool_input.get("run_in_background"):
         if "BACKGROUND_NEEDED" in cmd:
             sys.exit(0)
         print(
@@ -167,13 +170,14 @@ def main():
                         "hookEventName": "PreToolUse",
                         "permissionDecision": "deny",
                         "permissionDecisionReason": (
-                            "BLOCKED: run_in_background=true in a subagent. Ending your "
-                            "turn returns you to your parent, so you can't idle and wait "
-                            "for the completion notification — you'd end up polling the "
-                            "output file. Run the command synchronously with a high "
-                            "timeout instead (up to timeout=600000, 10 min). If you "
-                            "genuinely need a process that outlives the call (e.g. a "
-                            "server), include BACKGROUND_NEEDED in the command: "
+                            "BLOCKED: run_in_background=true in an in-process teammate. "
+                            "While you're idle, your own background-task notifications "
+                            "and Monitor events don't wake you — they wait until someone "
+                            "messages you — so a background job would sit finished and "
+                            "unread. Run the command synchronously with a high timeout "
+                            "instead (up to timeout=600000, 10 min). If you genuinely "
+                            "need a process that outlives the call (e.g. a server), "
+                            "include BACKGROUND_NEEDED in the command: "
                             "echo BACKGROUND_NEEDED && your_actual_command"
                         ),
                     }
@@ -182,8 +186,8 @@ def main():
         )
         sys.exit(0)
 
-    # --- Subagent without background: high sync timeouts allowed (only mode they have) ---
-    if subagent:
+    # --- In-process teammate without background: high sync timeouts allowed ---
+    if in_process:
         sys.exit(0)
 
     # --- Main agent / teammate: already background, leave alone ---
