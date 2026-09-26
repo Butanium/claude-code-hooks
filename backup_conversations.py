@@ -77,8 +77,11 @@ _COMPILED_REDACTORS = [(name, re.compile(pat), repl) for name, pat, repl in REDA
 # `"X": "v"`, whose quotes are backslash-escaped when the JSON sits inside a transcript
 # string. X is any UPPER_CASE name ending in one of SECRET_NAME_SUFFIXES (_API_KEY is a
 # _KEY), or a name defined in the file $CLAUDE_SECRETS_FILE points at — only the NAMES are
-# read from it; its values never enter this process. A value must be 8+ chars and not look
-# like a reference (`$VAR`, `OTHER_VAR`), so `KEY=$HF_TOKEN` and `X_TOKEN=HF_TOKEN` survive.
+# read from it; its values never enter this process. The env form is `NAME=value` with no
+# spaces (env dumps, .env, export) — code constants (`const X_KEY = "…"`) use spaces. A value
+# must be 8+ chars, hold a digit and a letter, and not look like a reference (`$VAR`,
+# `OTHER_VAR`): a 2026-09-25 census found `*_KEY` code constants (storage keys, metadata
+# keys) outnumbering real credentials until these two filters.
 SECRET_NAME_SUFFIXES = (b"_SECRET", b"_TOKEN", b"_KEY")
 
 
@@ -106,7 +109,7 @@ def _assignment_res() -> list[re.Pattern]:
         q = rb"(?:\\?[\"'])?"  # an optional quote, maybe JSON-escaped
         _ASSIGNMENT_RES = [
             # a word boundary, or a JSON escape (`\nNAME=` in an escaped env dump)
-            re.compile(rb"((?:(?<=\\[nrt])|(?<![A-Za-z0-9_]))" + name + rb"[ \t]*=[ \t]*" + q
+            re.compile(rb"((?:(?<=\\[nrt])|(?<![A-Za-z0-9_]))" + name + rb"=" + q
                        + rb")([^\s\"'\\$`;&|<>()]{8,})"),
             re.compile(rb"(\\?\"" + name + rb"\\?\"[ \t]*:[ \t]*\\?\")([^\"\\]{8,})"),
         ]
@@ -117,6 +120,8 @@ def _redact_assignment(m: re.Match) -> bytes:
     value = m.group(2)
     if re.fullmatch(rb"[A-Z][A-Z0-9_]*_[A-Z0-9_]+", value):  # another variable's name
         return m.group(0)
+    if not (re.search(rb"[0-9]", value) and re.search(rb"[A-Za-z]", value)):
+        return m.group(0)  # `X_KEY = "tinkerscope-history"`: a code constant, not a credential
     return m.group(1) + value[:4] + b"_REDACTED"
 BACKUP_SUFFIXES = (".jsonl", ".json", ".txt", ".md")
 # Matches "- <path> (ref:" inside HF's 400 secrets-scanner response body.
