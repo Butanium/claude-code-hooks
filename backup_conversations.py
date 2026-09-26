@@ -29,7 +29,8 @@ Uploaded: transcripts (*.jsonl, subagents included), plus the *.json / *.txt /
 *.md that sit beside them — subagent .meta.json, tool-results/ (large tool
 outputs the transcript only references), workflow state, and per-project
 auto-memory (memory/*.md), which nothing else backs up. Each file is redacted in-memory before
-upload — known secret patterns (HF/OpenAI/Anthropic/GitHub/AWS/Google tokens)
+upload — known secret patterns (HF/OpenAI/Anthropic/GitHub/AWS/Google/Modal tokens, and any
+value assigned to a *_SECRET / *_TOKEN / *_KEY variable or to a name in $CLAUDE_SECRETS_FILE)
 are replaced with `<prefix><first-4-chars>_REDACTED` so HF's server-side
 secrets scanner accepts the commit. Local files are never modified.
 
@@ -66,8 +67,57 @@ REDACTION_RULES = [
     ("github-oauth", rb"(gh[osu]_)([A-Za-z0-9]{4})[A-Za-z0-9]{32,}",      rb"\1\2_REDACTED"),
     ("aws-access",   rb"(AKIA)([0-9A-Z]{4})[0-9A-Z]{12}",                 rb"\1\2_REDACTED"),
     ("google-api",   rb"(AIza)([0-9A-Za-z_\-]{4})[0-9A-Za-z_\-]{31}",     rb"\1\2_REDACTED"),
+    ("modal",        rb"(?:(?<=\\[nrt])|(?<![A-Za-z0-9]))(a[ks]-)([A-Za-z0-9]{4})[A-Za-z0-9]{16,}", rb"\1\2_REDACTED"),
+    ("runpod",       rb"(rpa_)([A-Za-z0-9]{4})[A-Za-z0-9]{16,}",          rb"\1\2_REDACTED"),
 ]
 _COMPILED_REDACTORS = [(name, re.compile(pat), repl) for name, pat, repl in REDACTION_RULES]
+
+# Beyond known token shapes: the VALUE assigned to a secret-looking variable, in the forms a
+# transcript carries it — `export X=v` / `X=v` (env dumps, .env cats, commands) and JSON
+# `"X": "v"`, whose quotes are backslash-escaped when the JSON sits inside a transcript
+# string. X is any UPPER_CASE name ending in one of SECRET_NAME_SUFFIXES (_API_KEY is a
+# _KEY), or a name defined in the file $CLAUDE_SECRETS_FILE points at — only the NAMES are
+# read from it; its values never enter this process. A value must be 8+ chars and not look
+# like a reference (`$VAR`, `OTHER_VAR`), so `KEY=$HF_TOKEN` and `X_TOKEN=HF_TOKEN` survive.
+SECRET_NAME_SUFFIXES = (b"_SECRET", b"_TOKEN", b"_KEY")
+
+
+def _secrets_file_names() -> list[bytes]:
+    path = os.environ.get("CLAUDE_SECRETS_FILE")
+    if not path:
+        return []
+    try:
+        text = Path(path).expanduser().read_bytes()
+    except OSError:
+        return []
+    names = re.findall(rb"^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=", text, re.M)
+    return sorted(set(names))
+
+
+_ASSIGNMENT_RES: list[re.Pattern] | None = None
+
+
+def _assignment_res() -> list[re.Pattern]:
+    global _ASSIGNMENT_RES
+    if _ASSIGNMENT_RES is None:
+        alts = [rb"[A-Z][A-Z0-9_]*(?:" + b"|".join(SECRET_NAME_SUFFIXES) + rb")"]
+        alts += [re.escape(n) for n in _secrets_file_names()]
+        name = rb"(?:" + b"|".join(alts) + rb")"
+        q = rb"(?:\\?[\"'])?"  # an optional quote, maybe JSON-escaped
+        _ASSIGNMENT_RES = [
+            # a word boundary, or a JSON escape (`\nNAME=` in an escaped env dump)
+            re.compile(rb"((?:(?<=\\[nrt])|(?<![A-Za-z0-9_]))" + name + rb"[ \t]*=[ \t]*" + q
+                       + rb")([^\s\"'\\$`;&|<>()]{8,})"),
+            re.compile(rb"(\\?\"" + name + rb"\\?\"[ \t]*:[ \t]*\\?\")([^\"\\]{8,})"),
+        ]
+    return _ASSIGNMENT_RES
+
+
+def _redact_assignment(m: re.Match) -> bytes:
+    value = m.group(2)
+    if re.fullmatch(rb"[A-Z][A-Z0-9_]*_[A-Z0-9_]+", value):  # another variable's name
+        return m.group(0)
+    return m.group(1) + value[:4] + b"_REDACTED"
 BACKUP_SUFFIXES = (".jsonl", ".json", ".txt", ".md")
 # Matches "- <path> (ref:" inside HF's 400 secrets-scanner response body.
 _OFFENDING_FILE_RE = re.compile(r"-\s+(\S+\.(?:jsonl|json|txt|md))\s+\(ref:")
@@ -81,6 +131,12 @@ def redact_secrets(data: bytes) -> tuple[bytes, dict[str, int]]:
         if n:
             counts[name] = n
         data = new_data
+    for pattern in _assignment_res():
+        before = data
+        data = pattern.sub(_redact_assignment, data)
+        if data != before:
+            n = sum(1 for m in pattern.finditer(before) if _redact_assignment(m) != m.group(0))
+            counts["secret-assignment"] = counts.get("secret-assignment", 0) + n
     return data, counts
 
 CLAUDE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
