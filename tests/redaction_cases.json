@@ -1,0 +1,23 @@
+{
+  "_note": "Shared redaction fixture. Pinned in two repos: claude-code-hooks tests/redaction_cases.json and whowas redaction_cases.json must stay byte-identical; each repo's test compares against the other copy when it is on disk. {FAKE} is substituted with `fake`. Every secret here is synthetic.",
+  "fake": "Qm7Xk2Lp9Rt4Vw8Yz3Nb",
+  "secrets_file": "export ODDLY_NAMED_THING=placeholder\nPLAIN_CRED=placeholder\n",
+  "redact": [
+    {"label": "modal secret", "text": "token as-{FAKE}xx ready", "kept": ["ready"]},
+    {"label": "modal id", "text": "id=ak-{FAKE}yy", "kept": []},
+    {"label": "runpod key", "text": "key rpa_{FAKE}ZZ9 set", "kept": ["set"]},
+    {"label": "export NAME_SECRET=", "text": "export MODEL_TOKEN_SECRET={FAKE}\nexport OTHER=1", "kept": ["OTHER=1"]},
+    {"label": "env dump NAME_TOKEN=", "text": "PATH=/usr/bin\nWANDB_TOKEN={FAKE}\nHOME=/h", "kept": ["PATH=/usr/bin", "HOME=/h"]},
+    {"label": "quoted NAME_API_KEY=", "text": "OPENROUTER_API_KEY=\"{FAKE}\" python run.py", "kept": ["python run.py"]},
+    {"label": "json NAME_KEY", "text": "{\"SERVICE_KEY\": \"{FAKE}\", \"region\": \"eu\"}", "kept": ["region"]},
+    {"label": "secrets-file name", "text": "ODDLY_NAMED_THING={FAKE}", "kept": []},
+    {"label": "hf token", "text": "HF says hf_{FAKE}ABCD", "kept": ["HF says"]}
+  ],
+  "keep": [
+    {"label": "reference $VAR", "text": "export HF_TOKEN=$HF_TOKEN_PROD"},
+    {"label": "reference OTHER_VAR", "text": "SOME_TOKEN=HF_TOKEN_PROD"},
+    {"label": "short value", "text": "RETRY_KEY=abc"},
+    {"label": "prose mentions name", "text": "set MODEL_TOKEN_SECRET before running"},
+    {"label": "not secret-named", "text": "RUN_NAME={FAKE}"}
+  ]
+}
