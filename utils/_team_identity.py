@@ -32,7 +32,9 @@ def _ancestor_args(max_depth: int = 8) -> list[str] | None:
     return None
 
 
-def identity(data: dict) -> tuple[str, str] | None:
+def identity(data: dict, lead_configs=None) -> tuple[str, str] | None:
+    """`lead_configs`: the team config.json paths to search for a lead session
+    (default: all teams — a caller on a hot path can pass fewer)."""
     agent_id = data.get("agent_id") or ""
     if "@" in agent_id:
         name, team = agent_id.split("@", 1)
@@ -44,7 +46,7 @@ def identity(data: dict) -> tuple[str, str] | None:
         return args[args.index("--team-name") + 1], args[args.index("--agent-name") + 1]
     sid = data.get("session_id")
     if sid and TEAMS.is_dir():
-        for cfg in TEAMS.glob("*/config.json"):
+        for cfg in (TEAMS.glob("*/config.json") if lead_configs is None else lead_configs):
             try:
                 if json.loads(cfg.read_text()).get("leadSessionId") == sid:
                     return cfg.parent.name, "team-lead"

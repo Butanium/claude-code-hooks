@@ -126,7 +126,10 @@ def already_received(transcript: str | None, entries: list[dict]) -> set[str]:
 
 
 def inject(data: dict) -> None:
-    me = identity(data)
+    # Runs after every tool call of every session: only look for a lead among teams
+    # that have a message waiting for their lead.
+    me = identity(data, lead_configs=[p.parent.parent / "config.json"
+                                      for p in TEAMS.glob("*/midturn/team-lead.jsonl")])
     if not me:
         return
     team, name = me

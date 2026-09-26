@@ -829,3 +829,11 @@ exits 0). Replay script and firings CSV live with the sweep's notes.
   (project PostToolUse hooks ran in the pane teammate, UserPromptSubmit
   didn't), so the repeat at idle can't be blocked; the injected text says the
   message will be shown again.
+- (later) `midturn_messages.py` passed the live check and is wired (PostToolUse,
+  all tools): a probe lead's teammate tx3 sent rx "STOP-5" while rx was in a
+  15 s foreground python wait; rx got it as additionalContext after that call
+  (03:19:35) and wrote it down before its turn ended; the CLI's own delivery
+  came at 03:20:06, at idle; one injection only. Two earlier runs were
+  spoiled by the test design (the sleep hook backgrounded rx's `sleep 15`,
+  and haiku ended its turn on the task message). Lead lookup on the hot path
+  only reads teams that have a `midturn/team-lead.jsonl`; ~54 ms per call.
