@@ -39,6 +39,9 @@ SILENT = [
     ("null redirects", "ls && cat f > /dev/null 2>&1"),
     ("|| branch", "false || git push"),
     ("quoted &&", "echo 'a && git push'"),
+    # 2026-09-25 live false positive: the failure was the last `;` step, not the && group
+    ("write in an earlier ; list", "cd hooks && sed -i 's/a/b/' f.sh; python3 t.py; env | grep -c ^X"),
+    ("commit then a failing check", "git add f && git commit -m x\ngit log --oneline -1 | grep -q nope"),
 ]
 for label, cmd, n in FIRE:
     got = write_steps_after_and(cmd)

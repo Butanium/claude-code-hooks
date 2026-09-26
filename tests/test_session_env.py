@@ -37,7 +37,8 @@ def run(**env):
 res = run(CLAUDE_SECRETS_FILE=str(secrets))
 check("exit 0, prints nothing (SessionStart stdout would land in context)", res.returncode == 0 and res.stdout == "" and res.stderr == "")
 content = env_file.read_text()
-check("unsets the CLI's grep/find functions", "unset -f grep find" in content)
+check("unsets the CLI's find function, keeps its grep by default", "unset -f find 2>/dev/null" in content
+      and "unset -f grep" not in content)
 check("sources the secrets file", str(secrets).replace("'", "'\\''") in content)
 check("never writes a value", "fresh-value" not in content)
 run(CLAUDE_SECRETS_FILE=str(secrets))
@@ -52,7 +53,10 @@ check("a non-exported assignment stays unexported", sh.stdout.strip().endswith("
 
 env_file.unlink()
 run(CLAUDE_SECRETS_FILE=str(tmp / "missing"))
-check("missing secrets file: only the unset line", env_file.read_text().strip() == "unset -f grep find 2>/dev/null")
+check("missing secrets file: only the unset line", env_file.read_text().strip() == "unset -f find 2>/dev/null")
+env_file.unlink()
+run(CLAUDE_HOOKS_GNU_GREP="1")
+check("CLAUDE_HOOKS_GNU_GREP=1 unsets grep too", env_file.read_text().strip() == "unset -f grep find 2>/dev/null")
 env_file.unlink()
 run(CLAUDE_HOOKS_KEEP_CC_SEARCH="1")
 check("opt-out and no secrets: nothing written", not env_file.exists())

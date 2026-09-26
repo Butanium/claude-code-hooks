@@ -2,15 +2,17 @@
 """SessionStart hook: lines for $CLAUDE_ENV_FILE, which the CLI sources before
 every Bash tool command of the session. Prints nothing.
 
-1. `unset -f grep find`. When the Grep/Glob tools are off, Claude Code defines
-   `grep` (its bundled ugrep, --ignore-files) and `find` (bfs) as shell
-   functions in the Bash tool. They differ from GNU in ways that fail silently
-   inside compound commands: gitignored directories are skipped (a research
-   repo's results/), `{0,N}` context regexes exceed ugrep's complexity limit for
-   N >= 20, bfs rejects `-newermt "-2 minutes"`, and `command grep` breaks under
-   xargs. Unsetting them gives the system tools back; verified with fresh
-   `claude -p` sessions on 2.1.280 (GNU grep 3.12 on three separate calls).
-   `CLAUDE_HOOKS_KEEP_CC_SEARCH=1` skips this.
+1. `unset -f find`. When the Grep/Glob tools are off, Claude Code defines
+   `find` (its bundled bfs) and `grep` (ugrep, --ignore-files) as shell
+   functions in the Bash tool. bfs rejects GNU usage such as
+   `-newermt "-2 minutes"`, often silently inside a compound command; unsetting
+   it gives GNU find back (verified with fresh `claude -p` sessions on 2.1.280,
+   on three separate Bash calls). `CLAUDE_HOOKS_KEEP_CC_SEARCH=1` skips this.
+   `grep` is only unset with `CLAUDE_HOOKS_GNU_GREP=1`: ugrep skips gitignored
+   directories (so a research repo's results/ goes unsearched) and fails on
+   `{0,N}` context regexes for N >= 20, but GNU `grep -r` from a config dir whose
+   gitignored transcripts are gigabytes (~/.claude/projects: 5.8 GB here) would
+   crawl all of it. Which failure is worse depends on where you search.
 
 2. Re-source the secrets file named by `$CLAUDE_SECRETS_FILE` (~ and $VARS
    expanded; unset = skip). A tmux server keeps the environment it started
@@ -31,7 +33,8 @@ from pathlib import Path
 def lines() -> list[str]:
     out = []
     if os.environ.get("CLAUDE_HOOKS_KEEP_CC_SEARCH") != "1":
-        out.append("unset -f grep find 2>/dev/null")
+        gnu_grep = os.environ.get("CLAUDE_HOOKS_GNU_GREP") == "1"
+        out.append(f"unset -f {'grep find' if gnu_grep else 'find'} 2>/dev/null")
     secrets = os.environ.get("CLAUDE_SECRETS_FILE")
     if secrets:
         path = Path(os.path.expandvars(os.path.expanduser(secrets)))

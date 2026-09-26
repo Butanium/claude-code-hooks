@@ -45,6 +45,11 @@ def write_steps_after_and(command: str) -> list[str]:
     def rest_is_empty(pos):  # nothing but blanked heredoc bodies and their delimiters
         return all(not ln.strip() or ln.strip() in delims for ln in s[pos:].splitlines())
 
+    # The exit status is the last `;`/newline-separated list's, so only that list
+    # can have failed; newlines inside a heredoc (nothing real after them) don't count.
+    group_start = max((m.end() for m in matches if m.group(1) in (";", "\n") and not rest_is_empty(m.end())),
+                      default=0)
+
     for i, m in enumerate([*matches, None]):
         end = m.start() if m else len(s)
         if op == "&&":
@@ -55,7 +60,7 @@ def write_steps_after_and(command: str) -> list[str]:
         # `cat > f <<EOF` itself almost never fails: when more steps follow it, the
         # failure was most likely one of them (writing a script, then running it).
         last = m is None or rest_is_empty(m.end())
-        if after_and and (WRITE_STEP.search(stmt) or (last and CONTENT_WRITE.search(stmt))):
+        if start >= group_start and after_and and (WRITE_STEP.search(stmt) or (last and CONTENT_WRITE.search(stmt))):
             steps.append(" ".join(command[start:end].split())[:80])
         if m:
             op, start = m.group(1), m.end()

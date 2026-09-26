@@ -1,7 +1,7 @@
 #!/bin/bash
 # Live check for session_env.py: a `claude -p` launched from a tmux server that
 # carries a STALE value of a (fake) key must see the secrets file's value in its
-# Bash tool, and GNU grep instead of the CLI's ugrep function. Costs one short
+# Bash tool, and GNU find instead of the CLI's bfs function. Costs one short
 # haiku session. Run: bash tests/smoke_session_env.sh
 set -euo pipefail
 HOOKS="$(cd "$(dirname "$0")/.." && pwd)"
@@ -12,7 +12,7 @@ cat > "$T/settings.json" <<EOF
 {"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"VIRTUAL_ENV= uv run --project $HOOKS $HOOKS/session_env.py"}]}]}}
 EOF
 BIN=$(readlink -f "$(command -v claude)")
-printf '%s' 'Run exactly this one Bash command, then reply with its output verbatim and nothing else: echo "KEY=$FAKE_SESSION_ENV_KEY"; type -t grep' > "$T/q"
+printf '%s' 'Run exactly this one Bash command, then reply with its output verbatim and nothing else: echo "KEY=$FAKE_SESSION_ENV_KEY"; type -t find' > "$T/q"
 # The tmux server is started WITH the stale value, like a long-lived server whose env predates the file.
 tmux -L "$SOCK" new-session -d -e FAKE_SESSION_ENV_KEY=stale-inherited -e CLAUDE_SECRETS_FILE="$T/secrets" \
   -e DISABLE_AUTOUPDATER=1 -c /var/tmp \

@@ -796,3 +796,16 @@ exits 0). Replay script and firings CSV live with the sweep's notes.
   set, so the env-file route was chosen. `tests/smoke_session_env.sh` starts a
   tmux server carrying a stale fake key and checks that the session's Bash sees
   the file's value. Hooks themselves still get the CLI process's inherited env.
+
+## 2026-09-25 (later) — session_env keeps ugrep by default; partial_chain_warn looks at the last list only
+
+- `session_env.py` now unsets only `find` by default; `grep` needs
+  `CLAUDE_HOOKS_GNU_GREP=1`. GNU `grep -r` ignores .gitignore, and from
+  `~/.claude` that means crawling `projects/` (5.8 GB of transcripts on a
+  slow volume) and every `.venv`. ugrep's own failures (gitignored results/
+  dirs unsearched, `{0,N}` regexes over N=19) are real but cheaper here.
+- `partial_chain_warn.py` fired on its first live day for
+  `cd x && sed -i … f; python3 t.py; env | grep -c X`: the failure was the last
+  `;` step. The exit status belongs to the last `;`/newline list, so only
+  write steps in that list are named now (newlines inside heredocs don't split
+  lists). Archive replay: 14 firings in 557 failed calls, 10 sessions.
