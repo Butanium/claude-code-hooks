@@ -252,6 +252,37 @@ def sync_submodules() -> tuple[bool, list[str], list[str]]:
     return True, notes, warnings
 
 
+def push_autopush_submodules() -> tuple[list[str], list[str]]:
+    """Push each submodule marked `autopush = true` in .gitmodules whose pinned
+    commit is on no remote. Returns (notes, warnings).
+
+    Opt-in per submodule: the superproject push stays `check` so unreviewed work
+    never reaches a public repo, but a private repo has no such audience, and a
+    forgotten push there would otherwise block every later sync.
+    """
+    marked = git("config", "-f", ".gitmodules", "--type=bool", "--get-regexp", r"^submodule\..*\.autopush$")
+    notes, warnings = [], []
+    for line in marked.stdout.splitlines():
+        key, _, value = line.rpartition(" ")
+        if value != "true":
+            continue
+        name = key[len("submodule."):-len(".autopush")]
+        path = git("config", "-f", ".gitmodules", f"submodule.{name}.path").stdout.strip()
+        sha = recorded_sha(path) if path else None
+        sub = CLAUDE_DIR / path
+        if not sha or not (sub / ".git").exists():
+            continue
+        unpushed = git_in(sub, "rev-list", "--count", sha, "--not", "--remotes").stdout.strip()
+        if unpushed in ("", "0"):
+            continue
+        push = git_in(sub, "push", timeout=30)
+        if push.returncode == 0:
+            notes.append(f"pushed autopush submodule {path}")
+        else:
+            warnings.append(f"autopush submodule {path}: git push failed: {push.stderr.strip()}")
+    return notes, warnings
+
+
 def commits_ahead() -> int | None:
     """Local commits not on the upstream branch; None if no upstream."""
     result = git("rev-list", "--count", "@{u}..HEAD")
@@ -351,8 +382,12 @@ def sync_config() -> tuple[bool, str, list[str]]:
         # `check`, not `on-demand`: a gitlink bump committed in a session whose
         # submodule commits were never pushed must not reach the remote, or every
         # other machine gets a pointer it cannot fetch. Pushing the submodule
-        # ourselves would publish unreviewed work to public repos.
+        # ourselves would publish unreviewed work to public repos, hence only
+        # the private ones that opt in via `autopush`.
         if commits_ahead():
+            auto_notes, auto_warnings = push_autopush_submodules()
+            parts.extend(auto_notes)
+            warnings.extend(auto_warnings)
             push = git("push", "--recurse-submodules=check", timeout=15)
             if push.returncode != 0:
                 return False, "\n".join(parts + [f"git push failed: {push.stderr.strip()}"]), warnings

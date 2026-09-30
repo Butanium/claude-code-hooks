@@ -3,6 +3,22 @@
 Append-only. What changed, why, and the gotcha — the reasoning that would
 otherwise end up as a comment in the hook.
 
+## 2026-09-30 — sync_config.py: opt-in `autopush` for private submodules
+
+A session bumped a private submodule's gitlink without pushing the submodule. The
+superproject push (`--recurse-submodules=check`) then aborted, and every session start
+after that reported the sync hook as failed until someone pushed by hand.
+
+`--recurse-submodules=on-demand` for everything was rejected: it would publish unreviewed
+commits to the public submodules, which is the reason `check` is there. Instead, a submodule
+marked `autopush = true` in `.gitmodules` gets a plain `git push` before the superproject
+push, but only when its pinned commit is on no remote. Unmarked submodules behave as before.
+A failed autopush becomes a warning, and the `check` push that follows still blocks the
+superproject. Regression case 10 in `tests/test_sync_submodules.py`.
+
+Not covered: a submodule committed but not bumped. `sync_submodules` still warns about it
+rather than pushing and bumping, whether or not it is marked `autopush`.
+
 ## 2026-09-25 (later) — bgwatch_hint.py: full hint once per session, auto-backgrounded commands only past 2 min
 
 The hint added about 1,000 characters to every background launch: 572 launches in 60 sessions

@@ -192,5 +192,18 @@ check("after submodule push: sync succeeds", ok, f"message={message}")
 check("after submodule push: remote has the bump",
       run(super_origin, "rev-parse", "main:sub") == D)
 
+# --- 10. an `autopush` submodule's unpushed commit is pushed by the sync -------
+run(sub, "branch", "-q", "-u", "origin/work")
+run(super_, "config", "-f", ".gitmodules", "submodule.sub.autopush", "true")
+run(super_, "add", ".gitmodules")
+E = commit(sub, "e.txt", "E")  # never pushed
+run(super_, "add", "sub")
+run(super_, "commit", "-q", "-m", "mark sub autopush, bump to an unpushed commit")
+ok, message, warns = sync_config.sync_config()
+check("autopush: sync succeeds", ok, f"message={message} warns={warns}")
+check("autopush: submodule commit reached its remote",
+      run(TMP / "sub-origin", "rev-parse", "work") == E)
+check("autopush: remote has the bump", run(super_origin, "rev-parse", "main:sub") == E)
+
 print("ALL OK")
 subprocess.run(["rm", "-rf", str(TMP)])
