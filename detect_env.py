@@ -266,7 +266,8 @@ def main():
     # The warning below and the quirk files further down are full of non-ASCII;
     # on a cp1252 console every one of those prints is a crash otherwise.
     utf8_stdio()
-    model = json.loads(sys.stdin.read()).get("model") if not sys.stdin.isatty() else None
+    payload = json.loads(sys.stdin.read()) if not sys.stdin.isatty() else {}
+    model = payload.get("model")
     env = detect_env()
     env_config = load_env_md(env)
 
@@ -289,6 +290,10 @@ def main():
     env_data["env"] = env
     ENV_JSON_OUTPUT.write_text(json.dumps(env_data, indent=2) + "\n", encoding="utf-8")
     print(f"Generated environment.json for environment: {env}", file=sys.stderr)
+
+    # A resumed transcript already carries the greeting from its first start.
+    if payload.get("source") == "resume":
+        return
 
     env_warning = check_env_vars(env_data)
     if env_warning:
