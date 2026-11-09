@@ -364,4 +364,24 @@ out = run(server_launch("uv run pytest -q 2>&1 && echo done") + [assistant("read
           tool_input={"file_path": str(REAL)})
 check("non-server launch (&&, 2>&1) still denied", decision(out) == "deny", str(out))
 
+
+# 2.1.314+: a Monitor's shell command reaches Bash hooks as tool_name "Bash"; only the
+# transcript's tool_use block (by tool_use_id) says Monitor.
+def run_call(issuer):
+    cmd = f"tail -f {OUTPUT} | grep --line-buffered DONE"
+    call = {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "toolu_cur", "name": issuer, "input": {"command": cmd, "description": "watch"}}]}}
+    with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+        for rec in [agent_launch(), assistant("polling"), call]:
+            f.write(json.dumps(rec) + "\n")
+    payload = {"tool_name": "Bash", "tool_use_id": "toolu_cur", "transcript_path": f.name,
+               "tool_input": {"command": cmd, "description": "watch"}}
+    proc = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload), capture_output=True, text=True)
+    check(f"hook exits 0 ({issuer})", proc.returncode == 0, proc.stderr)
+    return json.loads(proc.stdout) if proc.stdout.strip() else None
+
+
+check("Monitor tailing a live task's output is allowed", decision(run_call("Monitor")) == "allow")
+check("the same command from Bash is still denied", decision(run_call("Bash")) == "deny")
+
 print("\nall good")

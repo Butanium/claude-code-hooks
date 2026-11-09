@@ -41,6 +41,9 @@ Two read surfaces are guarded:
     command must START with one of those (after leading whitespace), so a deliberate
     wait-then-read like `sleep 30; cat <file>` — not an immediate poll — isn't
     matched.
+Monitor commands also reach this hook as Bash (2.1.314+, see utils/_tool_call.py).
+They are allowed: `tail -f <output> | grep` in a Monitor is the event stream that
+replaces polling.
 
 Failure policy — this hook does NOT silently fail open. Malformed hook input or an
 unreadable / corrupt transcript raise: the traceback goes to stderr and the script
@@ -62,6 +65,8 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+from utils._tool_call import is_monitor_call
 
 # Background task output files: /tmp/.../<session>/tasks/<taskId>.output
 # Non-anchored: matched against a Read file_path AND inside a Bash command string.
@@ -244,6 +249,8 @@ def main() -> None:
     task_id = _task_id(tool_name, tool_input)
     if task_id is None:
         return  # not a read of a task output file — guard doesn't apply
+    if is_monitor_call(data):
+        return  # a Monitor streams the file as events: the alternative to polling it
 
     transcript = data.get("transcript_path")
     if not transcript:

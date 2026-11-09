@@ -7,6 +7,7 @@ Run: python3 tests/test_force_background_sleep.py
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 HOOK = Path(__file__).resolve().parent.parent / "force_background_sleep.py"
@@ -54,4 +55,15 @@ out = run_hook({"tool_name": "Bash", "agent_id": "a123", "tool_input": {"command
 ok("end to end: subagent backgrounds too", out and out["updatedInput"]["run_in_background"] is True, repr(out))
 ok("end to end: teammate backgrounded", run_hook({"tool_name": "Bash", "agent_id": "w@team", "tool_input": {"command": "sleep 30"}}) is not None)
 ok("end to end: heredoc silent", run_hook({"tool_name": "Bash", "tool_input": {"command": SILENT[1][1]}}) is None)
+
+# 2.1.314+: a Monitor's command reaches Bash hooks as tool_name "Bash"; the transcript's
+# tool_use block (by tool_use_id) is the only thing that says Monitor.
+with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+    for issuer, tid in [("Monitor", "toolu_mon"), ("Bash", "toolu_bash")]:
+        f.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": tid, "name": issuer, "input": {"command": "until x; do sleep 5; done"}}]}}) + "\n")
+mon = {"tool_name": "Bash", "tool_use_id": "toolu_mon", "transcript_path": f.name,
+       "tool_input": {"command": "until x; do sleep 5; done", "description": "watch"}}
+ok("end to end: Monitor loop left alone", run_hook(mon) is None)
+ok("end to end: same loop from Bash still backgrounded", run_hook({**mon, "tool_use_id": "toolu_bash"}) is not None)
 print("all passed")

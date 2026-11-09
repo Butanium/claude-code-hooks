@@ -853,3 +853,25 @@ exits 0). Replay script and firings CSV live with the sweep's notes.
   spoiled by the test design (the sleep hook backgrounded rx's `sleep 15`,
   and haiku ended its turn on the task message). Lead lookup on the hot path
   only reads teams that have a `midturn/team-lead.jsonl`; ~54 ms per call.
+
+## 2026-11-09 — Monitor commands reach Bash hooks (CLI 2.1.314+)
+
+- Since 2.1.314 a PreToolUse hook whose matcher names Bash also runs on the
+  Monitor tool's shell commands. Read from the 2.1.321 bundle: the CLI rewrites
+  the input to `tool_name: "Bash"`, `tool_input: {command, description}`, and
+  keeps only the hook's deny/ask (allow and updatedInput are dropped). Matchers
+  and `if` conditions can't exclude Monitor: lookahead matchers and `Bash(...)`
+  conditions still match through the Bash family name.
+- `utils/_tool_call.py` tells them apart by the transcript's tool_use block for
+  `tool_use_id`. That row is written 25-110 ms after the hook starts (measured
+  with a polling probe hook, -p session on 2.1.321), so the lookup waits up to
+  2 s; it only runs after a hook's cheap checks already fired.
+- `no_poll_background.py` allows Monitor commands: it denied the recommended
+  `tail -f <task output> | grep --line-buffered X` stream as a poll.
+  `force_background_sleep.py` skips them: it told the model a Monitor's sleep
+  loop had been backgrounded, which the CLI never did.
+- Checked and unchanged: security_guard and pkill_self_match (a deny on a
+  Monitor command is wanted), no_tail_head_pipes (fires only with
+  run_in_background), force_background_bash (no timeout field in Monitor input),
+  stage_mine_caller (logging only). PostToolUse hooks don't see Monitor as Bash:
+  the family mapping needs the PreToolUse/PermissionRequest tool_input.

@@ -10,6 +10,9 @@ Patterns matched (anywhere a sleep is the wait primitive):
 - command starts with ``sleep `` (after stripping leading whitespace)
 - command contains ``do sleep `` (loop watchdog: ``while ...; do sleep N; done``)
 
+Monitor commands also reach this hook as Bash (2.1.314+, see utils/_tool_call.py);
+they are skipped, since a sleep loop is how a Monitor polls.
+
 Heredoc bodies, quoted strings and $(...) are ignored: a script or log line
 that mentions ``do sleep`` is not a wait (ENGINEERING_LOGS.md, 2026-09-22;
 an `echo "... do sleep 20 ..." >> log` was auto-backgrounded on 2026-09-25).
@@ -20,6 +23,7 @@ import sys
 
 from no_tail_head_pipes import strip_inert
 from utils._agent_kind import is_in_process_teammate
+from utils._tool_call import is_monitor_call
 
 
 def is_watchdog(cmd: str) -> bool:
@@ -37,6 +41,8 @@ def main():
         return
     if tool_input.get("run_in_background") or not is_watchdog(cmd):
         return
+    if is_monitor_call(data):
+        return  # a Monitor's loop is meant to sleep, and the CLI ignores updatedInput for it
 
     tool_input["run_in_background"] = True
     cmd_preview = cmd[:10] + "..." if len(cmd) > 10 else cmd
