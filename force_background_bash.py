@@ -95,11 +95,19 @@ SLEEP_RE = re.compile(r"^\s*sleep\b")
 # name, which survives identifier renames — the previous anchor was the
 # `&&!/git/i.test(` literal beside it, and 2.1.270 deleted that test, which
 # silently made every patched binary read as unpatched.
-# Kept in sync with `patches/auto-background.py` in the patches repo.
+# 2.1.317+: `X=(!cn||cap!==void 0)&&pred(cmd),` and the flag is passed as
+# `canAutoBackground:X&&cap===void 0`.
+# Kept in sync with `patches/auto-background.py` in the patches repo: `_FLAG_RE`
+# is its FLAG_RE and `_PATCHED_TAIL` its PATCHED_TAIL.
 # `[\w$]` throughout: minified names may contain `$`.
 _FLAG = b"canAutoBackground:"
-_FLAG_RE = re.compile(re.escape(_FLAG) + rb"([A-Za-z_$][\w$]*)[,}]")
-_PATCHED_TAIL = rb"=![\w$]+&&(?:[\w$]+===void 0&&)?!0(?:/\*[a-z]*\*/| *),"
+_JSID = rb"[A-Za-z_$][\w$]*"
+_FLAG_RE = re.compile(re.escape(_FLAG) + rb"(" + _JSID + rb")(?:&&" + _JSID + rb"===void 0)?[,}]")
+_PATCHED_TAIL = (
+    rb"=(?:!" + _JSID + rb"&&(?:" + _JSID + rb"===void 0&&)?"
+    rb"|\(!" + _JSID + rb"\|\|" + _JSID + rb"!==void 0\)&&)"
+    rb"!0(?:/\*[a-z]*\*/| *),"
+)
 _FLAG_WINDOW = 400
 def _auto_background_state(data):
     """PATCHED / STOCK / UNKNOWN for the auto-background patch.

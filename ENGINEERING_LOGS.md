@@ -875,3 +875,34 @@ exits 0). Replay script and firings CSV live with the sweep's notes.
   run_in_background), force_background_bash (no timeout field in Monitor input),
   stage_mine_caller (logging only). PostToolUse hooks don't see Monitor as Bash:
   the family mapping needs the PreToolUse/PermissionRequest tool_input.
+
+## 2026-11-10 — patch detectors are tested with the patches (tests/clipatch/)
+
+Four hook detectors mirror the regexes of a patch in claude-code-patches:
+`bgwatch_hint.py` (monitor-persistent, monitor-undefer), `force_background_bash.py`
+(auto-background) and `agent_worktree_teammate.py` (teammate-cwd). Two had gone stale
+because the patch was re-anchored for a new claude version and the hook was not:
+
+- monitor-persistent, from 2.1.289: the detector read every patched binary as unknown,
+  so the launch hint said "this build caps every watch at 30 min" and suggested
+  `timeout_ms=1800000`. Sessions followed it and re-armed their watches every 30 min.
+- auto-background, seen on 2.1.321 (fine on 2.1.293): the detector read the patched
+  binary as stock, so kill-class commands got the advisory deny instead of the clamp.
+
+`tests/test_clipatch.py` already asserted "never UNKNOWN on the live binary", but it did
+not cover the persistent detector and nothing ran it. What changed:
+
+- `tests/clipatch/test_hook_detectors.py` runs inside the patches repo's behavior suite
+  (`run(binary) -> Verdict`, wired with `CLAUDE_CLI_PATCH_EXTRA_TESTS_DIRS=hooks/tests/clipatch`
+  in settings env). On the patched binary every detector must read patched, on the
+  `.orig` copy every detector must read stock. It sets `COVERS`, so
+  `run_tests.py --only <patch>` runs it too: a session re-anchoring one of the four
+  patches sees the hook detector fail in the same run.
+- Each detector has a function of the binary's bytes (`_persistent_state`,
+  `_undefer_state`, `_auto_background_state`, `_teammate_cwd_state`), which is what the
+  test calls. It does not go through the cache or `CLAUDE_HOOKS_CLAUDE_BIN`, because the
+  suite runs tests in threads.
+- `inspect_cached` keys its cache on the detector's source files too. Before, a fixed
+  detector kept answering from what its stale version had concluded about the same binary.
+
+When re-anchoring a patch: copy its PATTERN / PATCHED regexes into the hook's detector.

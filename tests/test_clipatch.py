@@ -23,9 +23,10 @@ from pathlib import Path
 HOOKS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HOOKS))
 
-from bgwatch_hint import _MONITOR_ANCHORS, monitor_loaded_upfront  # noqa: E402
+from bgwatch_hint import (_MONITOR_ANCHORS, _PRE_FLAG, _persistent_state, monitor_loaded_upfront,  # noqa: E402
+                          monitor_persistent_available)
 from force_background_bash import auto_background_state  # noqa: E402
-from utils._clipatch import PATCHED, STOCK, UNKNOWN, claude_binary, text_patch_state  # noqa: E402
+from utils._clipatch import PATCHED, STOCK, UNKNOWN, claude_binary, inspect_cached, text_patch_state  # noqa: E402
 
 BIN_ENV = "CLAUDE_HOOKS_CLAUDE_BIN"
 failures = []
@@ -53,11 +54,17 @@ def monitor_state():
     return next((st for st in states if st in (PATCHED, STOCK)), states[0])
 
 
+def persistent_state():
+    return inspect_cached("monitor_persistent_test", _persistent_state) or UNKNOWN
+
+
 # --- a missing binary is UNKNOWN, and never a confident "unpatched" ----------
 os.environ[BIN_ENV] = "/nonexistent/claude"
 check("missing binary: monitor detector", monitor_state(), UNKNOWN)
 check("missing binary: monitor hint keeps the ToolSearch line", monitor_loaded_upfront(), False)
 check("missing binary: auto-background detector", auto_background_state(), UNKNOWN)
+check("missing binary: persistent detector", persistent_state(), UNKNOWN)
+check("missing binary: monitor hint keeps the 30-min timeout", monitor_persistent_available(), False)
 del os.environ[BIN_ENV]
 
 # --- the live binary must be legible to every detector -----------------------
@@ -67,6 +74,7 @@ else:
     print(f"     live binary: {os.path.realpath(claude_binary())}")
     check_in("live binary: monitor detector anchors", monitor_state(), (PATCHED, STOCK))
     check_in("live binary: auto-background detector anchors", auto_background_state(), (PATCHED, STOCK))
+    check_in("live binary: persistent detector anchors", persistent_state(), (PATCHED, STOCK, _PRE_FLAG))
 
 # --- a pristine .orig backup, if one is around, must read STOCK --------------
 # The patch scripts leave `<binary>.orig` beside the binary they patch, which is
@@ -85,6 +93,7 @@ else:
     check("stock binary: monitor detector", monitor_state(), STOCK)
     check("stock binary: monitor hint keeps the ToolSearch line", monitor_loaded_upfront(), False)
     check_in("stock binary: auto-background detector", auto_background_state(), (STOCK,))
+    check_in("stock binary: persistent detector", persistent_state(), (STOCK, _PRE_FLAG))
     del os.environ[BIN_ENV]
 
 print()

@@ -32,7 +32,8 @@ import tempfile
 import time
 
 from utils._agent_kind import is_in_process_teammate
-from utils._clipatch import PATCHED, STOCK, UNKNOWN, inspect_cached, module_runs_from_source, text_patch_state
+from utils._clipatch import (PATCHED, STOCK, UNKNOWN, inspect_cached, module_runs_from_source, text_patch_state,
+                             text_patch_state_in)
 
 # --- is Monitor loaded up front, or behind ToolSearch? ------------------------
 # Monitor ships deferred, so stock the model must spend a `ToolSearch
@@ -52,6 +53,12 @@ _MONITOR_ANCHORS = (
 )
 
 
+def _undefer_state(data):
+    """PATCHED / STOCK / UNKNOWN for the monitor-undefer patch: the anchor pair of this binary's shape."""
+    states = [text_patch_state_in(data, stock, patched) for stock, patched in _MONITOR_ANCHORS]
+    return next((st for st in states if st != UNKNOWN), UNKNOWN)
+
+
 def monitor_loaded_upfront() -> bool:
     """True only when we positively confirmed the undefer patch is in effect.
     UNKNOWN (anchor moved, binary unreadable) keeps the ToolSearch line, which
@@ -66,11 +73,19 @@ def monitor_loaded_upfront() -> bool:
 # 2.1.271 put every Monitor on a <=30-min deadline behind the GrowthBook flag
 # `tengu_breezy_crescent` and dropped `persistent` from the schema, so a call
 # that still passes it is silently capped. The `monitor-persistent.py` patch
-# rewrites the gate to `return!1&&<id>("tengu_breezy_crescent")}`. A binary
-# with no flag string at all predates the change and honours persistent as-is.
+# rewrites the gate to `return!1&&<id>("tengu_breezy_crescent")}`, or since
+# 2.1.289, where a diskless-session test sits in front of the flag, to
+# `return <id>()||0&&<id>("tengu_breezy_crescent")}`. A binary with no flag
+# string at all predates the change and honours persistent as-is. These two
+# regexes are the patch's own PATTERN and PATCHED; keep them in step with it.
 _PERSIST_FLAG = b'"tengu_breezy_crescent"'
-_PERSIST_STOCK_RE = re.compile(rb"return [A-Za-z_$][\w$]*\(" + re.escape(_PERSIST_FLAG) + rb",!0\)\}")
-_PERSIST_PATCHED_RE = re.compile(rb"return!1&&[A-Za-z_$][\w$]*\(" + re.escape(_PERSIST_FLAG) + rb"\)\}")
+_JSID = rb"[A-Za-z_$][\w$]*"
+_PERSIST_STOCK_RE = re.compile(
+    rb"return (?:" + _JSID + rb"\(\)\|\|)?" + _JSID + rb"\(" + re.escape(_PERSIST_FLAG) + rb",!0\)\}"
+)
+_PERSIST_PATCHED_RE = re.compile(
+    rb"return(?:!1&&| " + _JSID + rb"\(\)\|\|0&&)" + _JSID + rb"\(" + re.escape(_PERSIST_FLAG) + rb"\)\}"
+)
 _PRE_FLAG = "pre-flag"
 
 

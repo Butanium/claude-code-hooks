@@ -24,6 +24,7 @@ it as a confident "unpatched".
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -125,14 +126,24 @@ def claude_binary():
     return None
 
 
-def inspect_cached(cache_name, inspect):
+def _mtime(path):
+    try:
+        return int(os.stat(path).st_mtime)
+    except OSError:
+        return 0
+
+
+def inspect_cached(cache_name, inspect, salt=""):
     """Run `inspect(data)` over the live bundle's bytes, memoised per binary.
 
-    The cache is keyed on (realpath, size, mtime), so a claude update — which
-    ships a fresh unpatched binary — invalidates it on its own. One file per
-    detector rather than one shared dict: writers then never read-modify-write
-    the same file, so concurrent hooks can't clobber each other's entries.
-    Returns None if the binary can't be located or read.
+    The cache is keyed on the binary (realpath, size, mtime), so a claude update
+    — which ships a fresh unpatched binary — invalidates it on its own, and on
+    the detector (mtime of this file and of the file defining `inspect`, plus
+    `salt` for anchors passed in as arguments), so a re-anchored detector is not
+    answered from what its previous version concluded about the same binary.
+    One file per detector rather than one shared dict: writers then never
+    read-modify-write the same file, so concurrent hooks can't clobber each
+    other's entries. Returns None if the binary can't be located or read.
     """
     path = claude_binary()
     if not path:
@@ -142,7 +153,8 @@ def inspect_cached(cache_name, inspect):
         st = os.stat(path)
     except OSError:
         return None
-    key = [path, st.st_size, int(st.st_mtime)]
+    key = [path, st.st_size, int(st.st_mtime),
+           f"{_mtime(__file__)}-{_mtime(inspect.__code__.co_filename)}-{salt}"]
     # Unix /tmp is shared, so the cache name carries the uid to keep users apart.
     # Windows has no os.getuid() and hands each user their own temp dir anyway.
     uid = os.getuid() if hasattr(os, "getuid") else ""
@@ -170,6 +182,14 @@ def inspect_cached(cache_name, inspect):
     return value
 
 
+def text_patch_state_in(data, stock, patched):
+    """`text_patch_state` for bytes already in hand (no binary lookup, no cache)."""
+    at = data.find(patched)
+    if at != -1:
+        return PATCHED if module_runs_from_source(data, at) else STOCK
+    return STOCK if stock in data else UNKNOWN
+
+
 def text_patch_state(stock, patched, cache_name):
     """Whether a same-length text patch is in effect, as PATCHED / STOCK / UNKNOWN.
 
@@ -184,10 +204,5 @@ def text_patch_state(stock, patched, cache_name):
     process actually executes.
     """
 
-    def inspect(data):
-        at = data.find(patched)
-        if at != -1:
-            return PATCHED if module_runs_from_source(data, at) else STOCK
-        return STOCK if stock in data else UNKNOWN
-
-    return inspect_cached(cache_name, inspect) or UNKNOWN
+    salt = hashlib.sha1(stock + b"\0" + patched).hexdigest()[:12]
+    return inspect_cached(cache_name, lambda data: text_patch_state_in(data, stock, patched), salt) or UNKNOWN

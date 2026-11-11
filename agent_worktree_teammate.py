@@ -107,6 +107,12 @@ def teammates_run_in_process() -> bool:
     return not os.environ.get("TMUX") and os.environ.get("TERM_PROGRAM") != "iTerm.app"
 
 
+def _teammate_cwd_state(data: bytes) -> bool:
+    """True iff the teammate-cwd patch's marker is in the bundle and its module runs from source."""
+    at = data.find(MARKER)
+    return at != -1 and module_runs_from_source(data, at)
+
+
 def running_binary_patched() -> bool:
     exe = _claude_ancestor_exe()
     if not exe:
@@ -127,8 +133,7 @@ def running_binary_patched() -> bool:
         data = Path(exe).read_bytes()
     except OSError:
         return False
-    at = data.find(MARKER)
-    value = at != -1 and module_runs_from_source(data, at)
+    value = _teammate_cwd_state(data)
     try:
         tmp = cache.with_suffix(f".{os.getpid()}")
         tmp.write_text(json.dumps({"key": key, "value": value}))
