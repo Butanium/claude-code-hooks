@@ -906,3 +906,11 @@ not cover the persistent detector and nothing ran it. What changed:
   detector kept answering from what its stale version had concluded about the same binary.
 
 When re-anchoring a patch: copy its PATTERN / PATCHED regexes into the hook's detector.
+
+## 2026-11-11 — bgwatch_hint.py: the watch path is absolute
+
+The hint printed the job's log relative to the shell's working directory at launch
+("fewer tokens to retype"). A Monitor runs in whatever directory the shell is in when it is
+armed, so after a `cd` bgwatch looked for the file in the wrong place and gave up after its
+15 s wait for the file to appear. The hint now prints the absolute path. Same change in the
+bgwatch repo's `adoption/hooks/bgwatch_hint.py`, whose tests asserted the relative form.
