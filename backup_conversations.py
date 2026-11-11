@@ -60,9 +60,9 @@ from filelock import FileLock, Timeout
 # prefix + first 4 chars of the body so the user can still distinguish which
 # token leaked, but is short enough that HF's scanner won't re-validate it.
 REDACTION_RULES = [
-    ("sk-ant",       rb"(sk-ant-)([A-Za-z0-9_\-]{4})[A-Za-z0-9_\-]{16,}", rb"\1\2_REDACTED"),
+    ("sk-ant",       rb"(?:(?<=\\[nrt])|(?<![A-Za-z0-9]))(sk-ant-)([A-Za-z0-9_\-]{4})[A-Za-z0-9_\-]{16,}", rb"\1\2_REDACTED"),
     ("hf",           rb"(hf_)([A-Za-z0-9]{4})[A-Za-z0-9]{16,}",           rb"\1\2_REDACTED"),
-    ("openai",       rb"(sk-)([A-Za-z0-9_\-]{4})[A-Za-z0-9_\-]{16,}",     rb"\1\2_REDACTED"),
+    ("openai",       rb"(?:(?<=\\[nrt])|(?<![A-Za-z0-9]))(sk-)([A-Za-z0-9_\-]{4})[A-Za-z0-9_\-]{16,}", rb"\1\2_REDACTED"),
     ("github-pat",   rb"(ghp_)([A-Za-z0-9]{4})[A-Za-z0-9]{32,}",          rb"\1\2_REDACTED"),
     ("github-oauth", rb"(gh[osu]_)([A-Za-z0-9]{4})[A-Za-z0-9]{32,}",      rb"\1\2_REDACTED"),
     ("aws-access",   rb"(AKIA)([0-9A-Z]{4})[0-9A-Z]{12}",                 rb"\1\2_REDACTED"),

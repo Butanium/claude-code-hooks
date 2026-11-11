@@ -62,6 +62,20 @@
       "kept": [
         "HF says"
       ]
+    },
+    {
+      "label": "anthropic key",
+      "text": "key sk-ant-api03-{FAKE} works",
+      "kept": [
+        "works"
+      ]
+    },
+    {
+      "label": "openai key after a newline",
+      "text": "line one\nsk-proj-{FAKE}",
+      "kept": [
+        "line one"
+      ]
     }
   ],
   "keep": [
@@ -96,6 +110,10 @@
     {
       "label": "env value without digits",
       "text": "export COLLAPSE_KEY=collapsedsections"
+    },
+    {
+      "label": "word ending in sk-",
+      "text": "task-list-workflow-is-dead-for-real"
     }
   ]
 }
