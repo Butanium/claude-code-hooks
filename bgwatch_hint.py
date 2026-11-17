@@ -44,12 +44,16 @@ from utils._clipatch import (PATCHED, STOCK, UNKNOWN, inspect_cached, module_run
 # PATCHED shapes, so a patch that still applies cannot disagree with this
 # check; `shouldDefer:!0` alone has ~46 copies in the binary, hence the
 # neighbouring property names, which are structural and survive minification.
-# The property after the flag moved at 2.1.271, hence one pair per shape.
+# The property after the flag moved at 2.1.271 and the one before it at 2.1.325,
+# hence one pair per shape.
 _MONITOR_ANCHORS = (
     (b"maxResultSizeChars:1e4,shouldDefer:!0,permissionCheckFailureDecision",
      b"maxResultSizeChars:1e4,shouldDefer:!1,permissionCheckFailureDecision"),      # <= 2.1.257
     (b'maxResultSizeChars:1e4,shouldDefer:!0,userFacingName(){return"Monitor"}',
-     b'maxResultSizeChars:1e4,shouldDefer:!1,userFacingName(){return"Monitor"}'),   # >= 2.1.271
+     b'maxResultSizeChars:1e4,shouldDefer:!1,userFacingName(){return"Monitor"}'),   # 2.1.271 - 2.1.321
+    # 2.1.325 put a `whenToUse:` template literal between the size cap and the flag.
+    (b'shouldDefer:!0,userFacingName(){return"Monitor"}',
+     b'shouldDefer:!1,userFacingName(){return"Monitor"}'),                          # >= 2.1.325
 )
 
 
